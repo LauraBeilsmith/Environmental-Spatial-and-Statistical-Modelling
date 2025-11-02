@@ -1,0 +1,847 @@
+---
+title: "Lab Assignment 3"
+output: html_document
+---
+
+
+# Smoke Gradients in Fort Collins
+#### Laura Beilsmith
+#### University of Colorado School of Public Health
+#### March 3, 2025
+
+
+
+
+
+## Abstract 
+
+As wildfire events become more common and more widespread with climate change, it becomes even more important for public health to investigate the sources of vulnerability and resilience in communities affected not only directly by fires but also by the smoke they produce.  
+
+This study investigates the spatial distribution of wildfire smoke exposure and its relationship with demographic factors during the 2020 Cameron Peak fire in Fort Collins, Colorado. Using data from PurpleAir monitors collected over a 61-day period (September-October 2020), particulate matter less than 2.5 micrometers in diameter (PM2.5) concentration patterns and their associations with Hispanic/Latino population percentage and poverty levels across census tracts was analyzed. Spatial interpolation techniques were employed to estimate PM2.5 levels in unmonitored areas, while regression analyses examined demographic relationships.   
+
+Results contradicted some previous studies' findings, with a significant negative association between poverty levels and PM2.5 exposure (-0.042 ug/m3 for every 1% increase in population below poverty level; 95% CI: -0.065, -0.02; p<0.05). Hispanic/Latino population percentage showed a non-significant negative trend (-0.018 ug/m3 per 1% increase; 95% CI: -0.045, 0.01; p=0.2). These findings suggest that geographic and meteorological factors may influence wildfire smoke distribution more strongly than socioeconomic patterns in this context, highlighting the need for nuanced approaches to environmental justice during wildfire events.    
+
+
+## Introduction 
+
+Wildfire events are increasingly dangerous environmental hazards that affect not only wildlife and threaten homes but negatively affect air quality and public health across much of the western U.S. The Cameron Peak fire, which burned from August - December of 2020 generated substantial smoke that impacted surrounding communities, particularly Fort Collins, CO and broader parts of Larimer County, CO. Wildfire smoke contains particulate matter less than 2.5 micrometers in diameter, meaning it has the potential to penetrate deep into the lungs, contributing the respiratory and cardiovascular health issues (Colorado Department of Public Health and Environment [CDPHE], n.d.; US Environmental Protection Agency [EPA], n.d.)  
+
+As climate change intensifies, the frequency, magnitude, and duration of wildfires are projected to increase, highlighting the importance of understanding how resulting smoke exposure is distributed across different populations. The distribution of wildfire smoke exposure across demographic groups remains inadequately understood, particularly in the context of specific fire events. While some research suggests that socioeconomic status and race/ethnicity may influence wildfire smoke exposure, the relationships are complex and may vary substantially by region, wildfire characteristics, and local demographic patterns (US EPA, n.d.).  
+
+Understanding the relationship between demographic factors and PM2.5 exposure during wildfire events is crucial for developing equitable emergency response and public health interventions. This analysis aims to examine the associations between Hispanic/Latino population percentage, poverty level population percentage, and PM2.5 concentrations during a period of time of the Cameron Peak fire in Fort Collins and surrounding areas. More specifically, this analysis investigates whether census tracts with higher proportions of Hispanic/Latino residents or higher poverty rates experienced different levels of wildfire smoke exposure as measured by PM2.5 concentrations from September of 2020 - October 2020. By analyzing the spatial distribution of PM2.5 across the study region and its relationship with these demographic variables, and performing regression analyses to determine any significant relationships, this study aims to characterize these complex relationships. 
+
+Through statistical analyses and spatial mapping, this study provides insights into how wildfire smoke exposure was distributed across different communities during a significant fire event. The results could be used to inform targeted public health interventions, emergency preparedness, and resource allocation strategies aimed at protecting vulnerable populations from increasing wildfire smoke exposure in a warming climate.  
+
+
+```{r setup, echo=TRUE, message=FALSE, warning=FALSE}
+
+
+#load packages 
+library(tidyverse)
+library(tidyr)
+library(dplyr)
+library(sf)
+library(tmap)
+library(tmaptools)
+library(ggplot2)
+library(lubridate)
+library(RAQSAPI)
+library(ggplot2)
+library(tibble)
+library(knitr)
+library(kableExtra)
+library(broom)
+library(OpenStreetMap)
+library(leaflet)
+library(spaMM)
+library(stars)
+library(tidycensus)
+
+
+
+```
+
+
+## Methods
+
+### Study Design and Description of Data Sources
+
+This study examines the spatial and temporal patterns of particulate matter with a diameter smaller than 2.5 micrometers (PM2.5) concentrations in Fort Collins, Colorado during the Cameron Peak fire from September 1st 2020, to October 31st 2020 (for 61 days in total). Data from PurpleAir monitors, which provide low-cost sensor measurements of PM2.5, was used to estimate smoke concentrations across the study area. This analysis focuses on characterizing intra-urban  gradients of PM2.5 and investigating potential relationships between smoke exposure and socioeconomic factors at the census tract level. Spatial data analyses were conducted using the sf, tmap, and stars packages in R, while statistical modeling was performed using the spaMM package for kriging and the tidyverse, broom, and lm() for regression analyses. The study aimed to determine the extent of smoke gradients in Fort Collins, interpolate PM2.5 levels across unmonitored areas, and assess whether historically disadvantaged communities may experience disproportionate exposure to wildfire smoke. R version 4.4.2 was used for all analyses and visualizations.  
+
+### Step 1: 
+
+The PurpleAir monitor data for September through October 2020 was loaded into R, which contains daily PM2.5 measurements in micrograms per cubic meter (ug/m3) from 11 monitors in Fort Collins during the Cameron Peak fire period. The dataset includes columns for monitor identification numbers, geographic coordinates (X and Y), timestamps, and PM2.5 concentration in ug/m3.   
+
+
+```{r Question1}
+
+
+### 1)	Read in the file FTC_PurpleAir_090121_103121.csv.
+
+
+#reading PurpleAir data (CSV)
+purpleair_data <- read_csv ("C:/R/FTC_PurpleAir_090121_103121.csv")
+
+#look at the dataset
+glimpse(purpleair_data)
+
+summary(purpleair_data)
+
+```
+
+
+
+
+### Step 2: 
+
+In order to visualize temporal patterns in PM2.5 concentrations, a timeseries plot was created over the study period using the ggplot2 package with a separate panel for each of the 11 PurpleAir monitors. The timestamp column in the original dataset was converted to a date format for ease of time series interpretation. 
+
+
+```{r Question2}
+
+### 2)	Using ggplot, create a graph that illustrates the time series of smoke concentrations from all monitors (a separate panel or color for each monitor).
+
+#converting the created_at column to a Date object
+purpleair_data <- purpleair_data %>%
+  mutate(created_at = as.Date(created_at, format = "%Y-%m-%d"))
+
+
+#use ggplot for timeseries for each monitor 
+ggplot(purpleair_data, aes(x = created_at, y = `PM2.5_ATM_ug/m3`, color = factor(`Monitor Number`))) +
+  geom_line(size = 0.8, alpha = 0.7) + 
+  facet_wrap(~`Monitor Number`, scales = "free_y") +  # Keeps individual y-scales
+  labs(title = "Fig. 1 Time Series of PM2.5 Concentrations by Monitor",
+       x = "Date",
+       y = "PM2.5 (µg/m³)",
+       color = "Monitor") + 
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))  # Rotates x-axis labels
+
+
+```
+
+**Figure 1** displays PM2.5 (smoke) concentrations in ug/m3 over the two month study periods with each monitor being represented with a different color and separate y-axis scale to accommodate varying concentration ranges across monitors. The timeseries shows substantial variability in PM2.5 concentrations both between different monitoring locations and over time. 
+
+The individual y-axis scales highlight that different neighborhoods experienced varying levels of smoke intensity, with some monitors consistently recording higher concentrations than others throughout the study period.
+Most monitors show elevated PM2.5 levels during mid-September and mid-October, with concentrations frequently exceeding 50 ug/m3 and occasionally surpassing 100 ug/m3 at certain locations. Monitors 1009 and 1011 recorded the highest concentrations, reaching approximately approximately 125 ug/m3 in late September. 
+
+
+
+### Step 3:
+
+In order to understand the geographic distribution of PurpleAir monitors in Fort Collins, a map was created of the study area with each of the 11 monitors. The dataset required correction as the coordinate columns were mislabeled - the "X" column contained latitude values (around 40.54-40.55) while the "Y" column contained longitude values (around -105.07 to -105.1). The bounding box was expanded by 0.02 degrees in all directions to ensure all monitors were fully visible on the map. 
+
+```{r Question3}
+
+### 3)	Using the tmap package, create a map of Fort Collins with locations of the monitors and a basemap displayed
+
+#this dataset:
+#Column "X" contained latitude values (40.54, 40.55, etc.)
+#Column "Y" contained longitude values (-105.07, -105.1, etc.)
+
+#the standard format for spatial data is usually:
+#X should be longitude
+#Y should be latitude
+
+
+summary(purpleair_data$X)  #check longitude
+summary(purpleair_data$Y)  #check latitude
+
+
+#converting data to an sf object, swapping X (longitude) and Y (latitude)
+purpleair_sf <- purpleair_data %>%
+  distinct(`Monitor Number`, X, Y) %>%  # Keep unique monitor locations
+  st_as_sf(coords = c("Y", "X"), crs = 4326) %>% # Swap X and Y
+  st_make_valid()  #Fix any invalid geometries 
+
+
+#bounding box
+current_bbox1 <- st_bbox(purpleair_sf)
+
+#expanding the bounding box 
+expanded_bbox <- current_bbox1 + c(-0.02, -0.02, 0.02, 0.02)  #adding a buffer
+
+
+
+#####STATIC map 
+
+
+#static plotting mode
+tmap_mode("plot")
+
+#basemap with purple dots for monitors
+tm_shape(purpleair_sf, bbox = expanded_bbox) +
+  tm_borders() +  #adds borders
+  tm_basemap("OpenStreetMap") +  
+  tm_dots(col = "purple", size = 0.7, alpha = 0.9) + 
+    tm_text("Monitor Number", size = 0.8, col = "black", #add monitor IDs as text labels
+          auto.placement = FALSE, 
+          ymod = 0.5) +
+  tm_layout(title = "Figure 2. PurpleAir Monitors in Fort Collins")
+
+```
+
+**Figure 2** displays the monitor locations over an OpenStreetMap basemap, showing the spatial distribution of the PurpleAir monitors. The monitors are more concentrated in the central and southern parts of the study area.
+
+
+
+
+### Step 4: 
+
+To produce interpolated maps of smoke (PM2.5) concentration across Fort Collins for each day in the dataset (61 days total), a spatial kriging approach was implemented. The PurpleAir monitor data was converted to a UTM projection (EPSG:32613) to ensure distance calculations were in meters rather than degrees. The monitor locations were then joined with their corresponding PM2.5 measurements and dates.    
+
+A 1km prediction grid was created around the monitor locations with a 1km buffer to define the interpolation area. This grid resolution was selected to balance computational efficiency with sufficient spatial detail to capture intra-urban pollution gradients. The grid was transformed to match the UTM projection of the monitor data to ensure consistent spatial referencing throughout the analysis.    
+
+Using the spaMM package, a for-loop was implemented to process each day's data separately. For each day with sufficient data points (at least 3 monitors reporting), kriging was performed using the Matern covariance model to estimate PM2.5 concentrations across the prediction grid. The Matern model was selected because it offers flexibility in modeling spatial correlation structures and is well-suited for environmental data with varying degrees of smoothness. The fitme() function was used to fit the kriging model, followed by the predict() function to estimate PM2.5 values at each grid point.  
+
+The predicted values were then converted to spatial objects and rasterized using the stars package to create continuous PM2.5 surfaces. This rasterization process transformed the point-based predictions into a continuous grid representing PM2.5 concentration across the entire study area.   
+
+While this process was done for each of the 61 days in the dataset, only 2 days were chosen for visualization (October 10th and 26th, 2020).   
+
+
+
+
+```{r Question4, warning=FALSE} 
+
+#Step 1: Convert your sf object to UTM projection (coordinates in meters)
+#join the spatial data with PM2.5 values first
+purpleair_utm <- 
+  purpleair_sf %>%
+  left_join(purpleair_data %>% 
+              select(`Monitor Number`, created_at, `PM2.5_ATM_ug/m3`),
+            by = "Monitor Number") %>%
+  rename(PM2.5 = `PM2.5_ATM_ug/m3`, Date = created_at) %>%
+  st_transform("EPSG:32613") %>% # UTM zone 13 North WGS84
+  cbind(., st_coordinates(.)) # Add X, Y coordinates as columns
+
+#Step 2: Create a 1km prediction grid around the monitors
+predpts_ll <- 
+  st_make_grid(purpleair_utm %>% 
+                 st_buffer(dist = 1000), # 1km buffer
+               cellsize = 1000, # 1km cell size
+               what = "centers") %>%
+  st_sf() %>% 
+  rownames_to_column(var = "gridcell")
+
+#Step 3: Create a raster template for later use
+predpts_ll_grid <- 
+  predpts_ll %>%
+  dplyr::select() %>%
+  st_rasterize()
+
+#Step 4: Transform prediction grid to UTM projection for kriging
+predpts_utm <- 
+  predpts_ll %>%
+  st_transform(st_crs(purpleair_utm)) %>%
+  cbind(., st_coordinates(.))
+
+#Step 5: Get a basemap of Fort Collins for the final maps
+#if map_osm already exists in the enviro (it should since we ran it earlier)
+if (!exists("map_osm")) {
+  fort_collins_bbox <- st_bbox(st_transform(predpts_ll, 4326))
+  map_osm <- read_osm(fort_collins_bbox, type = "osm")
+}
+
+#Step 6: Get unique dates from the dataset
+unique_dates <- unique(purpleair_utm$Date)
+
+#Step 7: Create empty list to store kriging results
+kriging_results <- list()
+
+#Step 8: Loop over each day in the dataset
+for (day in as.Date(unique_dates)) {
+  #day formatting as date
+  day <- as.Date(day)
+  
+  #filter data for the current day
+  single_day <- purpleair_utm %>% filter(Date == day)
+  
+  #if we have enough data points for this day, then continue
+  if (nrow(single_day) >= 3) {
+    
+    #perform kriging with Matern covariance model
+    krige <- fitme(PM2.5 ~ 1 + Matern(1|X+Y),
+                  data = single_day)
+    
+    #predict PM2.5 at grid points
+    preds <- predict(krige,
+                    newdata = predpts_utm %>%
+                      st_drop_geometry(),
+                    variances = list(linPred = TRUE,
+                                    predVar = TRUE))
+    
+    #format predictions into a tibble
+    preds_tbl <- tibble(
+      gridcell = names(preds[, 1]),
+      PM2.5_pred = preds[, 1],
+      PM2.5_var = attributes(preds)$predVar
+    )
+    
+    #join predictions with prediction grid coordinates
+    preds_utm <- left_join(predpts_utm,
+                          preds_tbl) %>%
+      st_as_sf(coords = c("X","Y"),
+              crs = st_crs(purpleair_utm))
+    
+    #Store results for this day
+    kriging_results[[as.character(day)]] <- preds_utm
+    
+    #Rasterize predictions
+    predrast_ll <- preds_utm %>%
+      st_rasterize(template = predpts_ll_grid) %>%
+      mutate(Date = day)
+    
+    #Create map for this day
+    #(Simplified to work with both tmap v3 and v4)
+    pred_map <- tm_shape(map_osm) +
+      tm_rgb() +
+      tm_shape(predrast_ll) +
+      tm_raster("PM2.5_pred", alpha = 0.85) +
+      tm_layout(title = paste("Fig 3. PM2.5 Kriging -", format(day, "%Y-%m-%d")))
+    
+    # Print maps only for the requested dates
+    # Using a more robust date comparison
+    target_dates <- as.Date(c("2020-10-10", "2020-10-26"))
+    if (day %in% target_dates) {
+      print(pred_map)
+    }
+  } else {
+    message(paste("Skipping", day, "- not enough data points"))
+  }
+}
+
+# all results
+all_results <- do.call(rbind, kriging_results)
+
+#summary of results
+print(summary(all_results))
+
+
+
+
+
+```
+
+
+**Figure 3** displays separate kriged PM2.5 maps for October 10 (blue) and October 26 (green). The Oct 10 map shows elevated PM2.5 concentrations in the northwestern portion of Fort Collins, with values reaching 55-60 μg/m³ in some areas, while the October 26 map reveals a different pattern with higher concentrations in the northern region, reaching up to 80-100 μg/m³. These two days demonstrate how smoke distribution varied significantly throughout the study period, affecting different parts of the city at different times.
+
+
+
+### Step 5: 
+
+Then, to characterize the intra-urban gradient of PM2.5 in Fort Collins during the Cameron Peak fire, summary statistics were calculated for each monitor location (**Table 1**). 
+
+A visualization of mean PM2.5 concentrations by monitor location was also created, with monitor location color characterized by PM2.5 concentration (**Figure 4**). 
+
+```{r Question5}
+
+### 5)	Based on your maps, how would you characterize the intra-urban gradient of PM2.5 in Fort Collins during this period? You can use your maps from Question 3 to help support your findings. 
+
+#calculate overall statistics for each monitor
+monitor_stats <- purpleair_utm %>%
+  st_drop_geometry() %>%
+  group_by(Monitor.Number) %>%
+  summarize(
+    Mean_PM2.5 = round(mean(PM2.5, na.rm = TRUE), 2),
+    Median_PM2.5 = round(median(PM2.5, na.rm = TRUE), 2),
+    Min_PM2.5 = round(min(PM2.5, na.rm = TRUE), 2),
+    Max_PM2.5 = round(max(PM2.5, na.rm = TRUE), 2),
+    StdDev_PM2.5 = round(sd(PM2.5, na.rm = TRUE), 2)
+  ) %>%
+  arrange(Monitor.Number)
+
+
+#table summary
+kable(monitor_stats, 
+      caption = "Table 1: PM2.5 Statistics by Monitor (µg/m³)",
+      col.names = c("Monitor ID", "Mean", "Median", "Minimum", "Maximum", "Std. Deviation"),
+      align = c("c", "r", "r", "r", "r", "r")) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"), 
+                full_width = FALSE)
+
+
+
+#calculate overall spatial variation
+spatial_variation <- sd(monitor_stats$Mean_PM2.5)
+cat("\nOverall spatial variation (SD of monitor means):", 
+    round(spatial_variation, 2), "µg/m³\n")
+
+#create an enhanced map showing monitor IDs
+avg_pm25_map <- tm_shape(map_osm) +
+  tm_rgb() +
+  tm_shape(purpleair_sf %>% 
+            left_join(monitor_stats, by = c("Monitor Number" = "Monitor.Number"))) +
+  tm_dots(col = "Mean_PM2.5", 
+          size = 0.7,
+          palette = "viridis",
+          title = "Average PM2.5 (µg/m³)") +
+  # Add monitor IDs as labels
+  tm_text("Monitor Number", 
+          size = 0.9,
+          col = "black",
+          bg.color = "white",
+          bg.alpha = 0.5,
+          just = "right",
+          xmod = 0.5,  # Offset text right
+          ymod = 0.5) +  # Offset text up
+  tm_layout(title = "Fig 4. Average PM2.5 Concentrations by Monitor Location",
+            legend.outside = TRUE)
+
+
+#print(pm25table)
+print(avg_pm25_map)
+
+
+
+```
+
+
+**Table 1** presents summary statistics, showing substantial variability in PM2.5 concentrations across monitoring locations. Mean PM2.5 concentrations ranged from 22.94 ug/m3 at Monitor 1004 to 37.87 ug/m3 at Monitor 1002, indicating significant spatial differences in smoke exposure throughout the city. 
+
+
+The monitors exhibited different patterns of variability, with standard deviations ranging from 17.36 ug/m3 at Monitor 1001 to 45.64 ug/m3 at Monitor 1002. This wide range suggests that some areas experienced more consistent PM2.5 levels while others saw more fluctuations, likely due to varying meteorological conditions and proximity to the fire source. Maximum concentrations exceeded 90 ug/m3 at several monitors (1002, 1003, 1005), further highlighting the severe but uneven impact of wildfire smoke.
+
+
+**Figure 4** shows that Monitor 1002 in the northern part of Fort Collins recorded the highest average PM2.5 levels (35-40 ug/m3), and Monitor 1009 on the western edge also showed elevated concentrations in the 30-35 ug/m3 range. However more central areas of the city, where Monitors 1001, 1004, and 1007 are located, generally experienced lower average concentrations (20-25 μg/m³), and Monitor 1011 on the eastern edge showed moderate levels. This spatial distribution suggests that the intra-urban smoke (PM2.5) gradient does not reflect a simple directional pattern but rather is influenced by factors such as topography, wind, and urban development. 
+
+
+### Step 6: 
+
+To investigate how the spatial distribution of smoke is different throughout socioeconomic demographic groups in Fort Collins, Census tract-level data for Larimer County was obtained from the 2019 American Community Survey (ACS) 5-year estimates using the tidycensus package. Three key variables were requested: total population (B01003_001), Hispanic or Latino population (B03003_003), and population below poverty level (B17001_002). The Hispanic/Latino population percentage and the percentage of population below poverty level were calculated for each census tract
+
+
+```{r Question6}
+
+### 6)	Load the census tract-level data for Larimer County, CO from the 2019 ACS.  Compute the %Hispanic/Latino and % below the poverty level in each tract.
+
+#census key
+mykey <- "48c0c2d9937ceef2e7172dc67b35102a5844226b" #LB key
+
+#census variables for Hispanic/Latino and poverty data
+census_vars <- c(
+  total_pop = "B01003_001",       # Total population
+  hispanic_pop = "B03003_003",    # Hispanic or Latino population
+  poverty_pop = "B17001_002"      # Population below poverty level
+)
+
+#Census API data for Larimer County, CO (2019)
+larimer_data <- get_acs(
+  geography = "tract",
+  variables = census_vars,
+  state = "CO",
+  county = "Larimer",
+  year = 2019,
+  survey = "acs5",
+  geometry = TRUE 
+)
+
+#reshape data to calculate percentages
+larimer_wide <- larimer_data %>%
+  select(GEOID, NAME, variable, estimate, geometry) %>%
+  pivot_wider(names_from = variable, values_from = estimate) %>%
+  #Calculate percentages
+  mutate(
+    pct_hispanic = (hispanic_pop / total_pop) * 100,
+    pct_poverty = (poverty_pop / total_pop) * 100
+  )
+
+
+head(larimer_wide)
+
+#create Summary statistics
+summary_stats <- larimer_wide %>%
+  st_drop_geometry() %>%
+  summarize(
+    mean_hispanic = mean(pct_hispanic, na.rm = TRUE),
+    median_hispanic = median(pct_hispanic, na.rm = TRUE),
+    min_hispanic = min(pct_hispanic, na.rm = TRUE),
+    max_hispanic = max(pct_hispanic, na.rm = TRUE),
+    mean_poverty = mean(pct_poverty, na.rm = TRUE),
+    median_poverty = median(pct_poverty, na.rm = TRUE),
+    min_poverty = min(pct_poverty, na.rm = TRUE),
+    max_poverty = max(pct_poverty, na.rm = TRUE)
+  )
+
+#summary statistics
+print(summary_stats)
+
+# table showing percentages by tract
+census_table <- larimer_wide %>%
+  st_drop_geometry() %>%
+  select(NAME, pct_hispanic, pct_poverty) %>%
+  arrange(NAME)
+
+#need to display table 
+kable(census_table, 
+      col.names = c("Census Tract", "% Hispanic/Latino", "% Below Poverty Level"),
+      digits = 2,
+      caption = "Table 2: Hispanic/Latino Population and Poverty Levels by Census Tract in Larimer County") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"), 
+                full_width = FALSE)
+
+
+```
+
+**Table 2** displays the percentage of the Hispanic/Latino population and the percentage of the population below the poverty level for each census tract in Larimer County.Hispanic/Latino population percentages ranged from as low as 4.62% to as high as 14.59% across different census tracts. Similarly, poverty rates showed significant variation, with some tracts having poverty rates as low as 0.57% while others reached approximately 30%. Census Tract 1, for example, showed a Hispanic/Latino percentage of 8.55% and a relatively high poverty rate of 21.70%, while Census Tract 11.04 had the highest poverty rate at 23.33% with a Hispanic/Latino percentage of 7.90%. These socioeconomic variations provide important context for understanding potential environmental justice issues, vulnerability, and resilience. 
+
+
+
+### Step 7:	Calculate the centroid of each tract.
+
+The centroid of each census tract in Larimer County was calculated to create representative points for subsequent PM2.5 interpolation. Centroids represent the geometric center of each tract polygon and serve as single point locations that can effectively characterize the entire tract for spatial analysis purposes. A map was created showin the census tract boundaries with black dots marking each centroid location (**Figure 5**). 
+
+
+```{r Question7}
+
+# 7) Calculate the centroid of each tract
+
+larimer_centroids <- larimer_wide %>%
+  st_centroid()
+
+#visualize the centroids
+centroid_map <- tm_shape(larimer_wide) +
+  tm_borders(col = "gray") +
+  tm_shape(larimer_centroids) +
+  tm_dots(col = "black", size = 0.3) +
+  tm_layout(title = "Fig. 5 Census Tract Centroids in Larimer County",
+            legend.outside = TRUE)
+
+print(centroid_map)
+
+#Export the centroids for use in Question 8
+#keep the centroid coordinates separate for prediction
+larimer_coords <- st_coordinates(larimer_centroids)
+larimer_centroids <- larimer_centroids %>%
+  mutate(
+    X = larimer_coords[,1],
+    Y = larimer_coords[,2]
+  )
+
+
+head(larimer_centroids)
+
+```
+
+
+### Step 8:  
+
+To estimate PM2.5 concentrations at each census tract in Larimer County, a spatial interpolation approach was implemented to predict values at tract centroids based on PurpleAir monitor data. the census tract centroids calculated previously were transformed to the same UTM projection (EPSG:32613) used for the PurpleAir monitors to ensure consistent spatial referencing. The centroid coordinates were extracted and organized into a data frame, with each point assigned a unique identifier (gridcell) to facilitate joining with tract information later in the analysis.
+
+For each day, the following steps were performed: 
+The PurpleAir data was filtered to include only measurements from that specific day. A check was performed to ensure at least 3 monitors had valid data for the day (the minimum needed for reliable kriging). For days with sufficient data, a Matern covariance model was fitted using the spaMM package's fitme() function. The fitted model was used to predict PM2.5 concentrations at each census tract centroid using the predict() function
+Prediction results, including both the estimated PM2.5 values and their associated prediction variances, and were stored. 
+
+A visiualization of this interpolation (predicted PM2.5 concentrations and tract centroids) is shown in **Figure 6**.
+
+
+
+```{r Question8}
+
+### 8) Interpolate PM2.5 at census tract centroids over each day in the PurpleAir dataset
+
+#convert centroids to UTM projection to match the Purple Air data
+larimer_centroids_utm <- larimer_centroids %>%
+  st_transform(st_crs(purpleair_utm))
+
+#create a data frame with just the coordinates for prediction
+centroid_coords <- larimer_centroids_utm %>%
+  st_coordinates() %>%
+  as.data.frame() %>%
+  rename(X = X, Y = Y) %>%
+  mutate(gridcell = row_number())
+
+#get unique dates from the Purple Air dataset
+unique_dates <- unique(purpleair_utm$Date)
+
+#empty list to store results
+centroid_pm25_results <- list()
+
+#loop over each day in the dataset
+for (day in as.Date(unique_dates)) {
+  
+  #filter data for the current day
+  single_day <- purpleair_utm %>% filter(Date == day)
+  
+  #only proceed if we have enough data points for this day
+  if (nrow(single_day) >= 3) { # Need at least a few points for kriging
+    
+    #perform kriging with Matern covariance model
+    krige <- fitme(PM2.5 ~ 1 + Matern(1|X+Y),
+                  data = single_day)
+    
+    #predict PM2.5 at centroid coordinates
+    preds <- predict(krige,
+                    newdata = centroid_coords,
+                    variances = list(linPred = TRUE, 
+                                    predVar = TRUE))
+    
+    #format predictions into a tibble
+    preds_tbl <- tibble(
+      gridcell = 1:nrow(centroid_coords),
+      PM2.5_pred = preds[,1],
+      PM2.5_var = attributes(preds)$predVar,
+      Date = day
+    )
+    
+    #store resukts
+    centroid_pm25_results[[as.character(day)]] <- preds_tbl
+    
+    #this prints progress as it runs 
+    if (which(unique_dates == day) %% 10 == 0) {
+      cat("Processed day", which(unique_dates == day), "of", length(unique_dates), "\n")
+    }
+  } else {
+    cat("Skipping", as.character(day), "- not enough data points\n")
+  }
+}
+
+#combinedaily results
+all_centroid_results <- bind_rows(centroid_pm25_results)
+
+#join with the original centroids to get the GEOID for each tract
+#add the gridcell to the centroids
+larimer_centroids_with_id <- larimer_centroids_utm %>%
+  mutate(gridcell = row_number())
+
+#join the kriging results with the tract information
+centroid_pm25_with_tract <- all_centroid_results %>%
+  left_join(larimer_centroids_with_id %>% 
+              st_drop_geometry() %>% 
+              select(gridcell, GEOID, NAME), 
+            by = "gridcell")
+
+
+head(centroid_pm25_with_tract)
+
+# Summarize results
+summary(centroid_pm25_with_tract$PM2.5_pred)
+
+#we can make a map of an example day just to show it worked 
+example_day <- as.Date(unique_dates[1])
+example_day_data <- centroid_pm25_with_tract %>%
+  filter(Date == example_day)
+
+#join with spatial data for mapping
+example_map_data <- larimer_centroids %>%
+  left_join(example_day_data, by = c("GEOID"))
+
+#creating a map for the example day
+example_map <- tm_shape(larimer_wide) +
+  tm_borders() +
+  tm_shape(example_map_data) +
+  tm_dots(col = "PM2.5_pred", 
+          palette = "rainbow",
+          title = "PM2.5 (µg/m³)",
+          size = 0.3) +
+  tm_layout(title = paste("Fig. 6 PM2.5 at Census Tract Centroids -", example_day),
+            legend.outside = TRUE)
+
+#display the map
+print(example_map)
+
+```
+
+
+
+***Figure 6** is an example of one day (September 1, 2020) taken from the interpolated data, showing that higher concentrations of Pm2.5 were seen in the eastern census tracts (red, yellow, green), however most of the lower concentrations were more common in western parts of the study area.  
+
+
+
+
+### Step 9:
+
+The mean PM2.5 concentration was calculated for each census tract over the entire 61-day study period to assess long-term smoke exposure patterns across Larimer County. Using the interpolated daily PM2.5 values at tract centroids, the data was grouped by census tract and averaged to produce a single mean concentration value for each tract. The mean PM2.5 values were joined with the census tract spatial data to enable visualization of the long-term exposure patterns (**Figure 7**). 
+
+
+```{r Question9}
+
+### 9)	Calculate the mean concentration in each tract centroid over the 61 day study period.
+
+#mean PM2.5 by tract
+tract_mean_pm25 <- centroid_pm25_with_tract %>%
+  group_by(GEOID, NAME) %>%
+  summarize(
+    mean_PM2.5 = mean(PM2.5_pred, na.rm = TRUE),
+    n_days = n()
+  ) %>%
+  ungroup()
+
+#joining the mean PM2.5 with spatial data for mapping
+larimer_pm25_map <- larimer_wide %>%
+  left_join(tract_mean_pm25, by = "GEOID")
+
+
+#create a map of mean PM2.5 by tract
+mean_pm25_map <- tm_shape(larimer_pm25_map) +
+  tm_fill("mean_PM2.5", 
+          style = "quantile",
+          title = "Mean PM2.5 (µg/m³)",
+          palette = "viridis") + 
+  tm_borders(alpha = 0.5) +
+  tm_layout(title = "Fig 7. Mean PM2.5 by Census Tract (61-day period)",
+            legend.outside = TRUE)
+
+#display the map
+print(mean_pm25_map)
+
+
+```
+
+
+**Figure 7** shows the 61-day average PM2.5 concentrations across Larimer County, showing the longer-term spatial gradient of smoke exposure. The northeastern part of Larimer County experienced the highest average PM2.5 concentrations during the study period (shown in yellow; 27.07 - 28.48 ug/m3). The central eastern areas show moderate to high concentrations (shown in light green; 25.51 - 27.07 ug/m3). 
+
+The lowest average concentrations (shown in dark purple; 24.07 to 24.94 ug/m3), were observed in census tracts more within the urban parts of Fort Collins. The western portions of the county generally experienced moderate concentrations (25.51 to 26.21 ug/m3). The range of mean values is relatively small, indicating that most areas throughout the county experienced elevated levels of PM2.5.
+
+This spatial pattern suggests that smoke from the Cameron Peak fire did not distribute uniformly across Larimer County over the study period, but instead smoke was influenced by weather, wind, and the fire's behavior. 
+
+
+
+### Step 10: 
+  
+To formally examine the relationship between 61-day average PM2.5 levels and socioeconomic characteristics at the census tract level, a regression analysis was performed. Linear regression models were fit to assess whether tracts with higher percentages of Hispanic/Latino residents or higher poverty rates experienced different levels of PM2.5 exposure during the Cameron Peak fire period. Previosuly in this analysis, the demographic data from the 2019 ACS was joined with the mean PM2.5 values to create a comprehensive dataset.   
+
+Scatterplots (**Figure 8** and **Figure 9**) were generated to visualize these relationsips, and the numeric results of these analyses are reported in **Table 4**.  
+
+
+## Results
+
+### Regression Analysis
+
+
+```{r Question10}
+
+# 10) Are the 61-day average PM2.5 levels higher in tracts with higher %Hispanic/Latino 
+# or higher % below the poverty level?
+
+#join the demographic data with the PM2.5 data
+analysis_data <- larimer_wide %>%
+  st_drop_geometry() %>%
+  select(GEOID, pct_hispanic, pct_poverty) %>%
+  inner_join(tract_mean_pm25, by = "GEOID")
+
+# Summary of the joined data
+summary(analysis_data)
+
+#scatter plot for Hispanic/Latino percentage vs PM2.5
+ggplot(analysis_data, aes(x = pct_hispanic, y = mean_PM2.5)) +
+  geom_point(alpha = 0.7) +
+  geom_smooth(method = "lm", color = "blue") +
+  labs(title = "Fig 8. Relationship between Hispanic/Latino Population and PM2.5",
+       x = "Hispanic/Latino Population (%)",
+       y = "Mean PM2.5 (µg/m³)") +
+  theme_minimal()
+
+#scatter plot for poverty percentage vs PM2.5
+ggplot(analysis_data, aes(x = pct_poverty, y = mean_PM2.5)) +
+  geom_point(alpha = 0.7) +
+  geom_smooth(method = "lm", color = "red") +
+  labs(title = "Fig 9. Relationship between Population Below Poverty Level and PM2.5",
+       x = "Population Below Poverty Level (%)",
+       y = "Mean PM2.5 (µg/m³)") +
+  theme_minimal()
+
+#regression model for Hispanic/Latino percentage
+hispanic_model <- lm(mean_PM2.5 ~ pct_hispanic, data = analysis_data)
+hispanic_summary <- summary(hispanic_model)
+
+#regression model for poverty percentage
+poverty_model <- lm(mean_PM2.5 ~ pct_poverty, data = analysis_data)
+poverty_summary <- summary(poverty_model)
+
+#displaying regression results
+cat("Regression Results for Hispanic/Latino Percentage:\n")
+print(hispanic_summary)
+cat("\nConfidence Intervals:\n")
+print(confint(hispanic_model))
+
+cat("\n\nRegression Results for Poverty Percentage:\n")
+print(poverty_summary)
+cat("\nConfidence Intervals:\n")
+print(confint(poverty_model))
+
+
+
+#create a table of regression results
+regression_results <- bind_rows(
+  tibble(
+    Variable = "Hispanic/Latino (%)",
+    Coefficient = coef(hispanic_model)[2],
+    `Std. Error` = summary(hispanic_model)$coefficients[2, 2],
+    `t-value` = summary(hispanic_model)$coefficients[2, 3],
+    `p-value` = summary(hispanic_model)$coefficients[2, 4],
+    `Lower CI` = confint(hispanic_model)[2, 1],
+    `Upper CI` = confint(hispanic_model)[2, 2],
+    `R-squared` = summary(hispanic_model)$r.squared
+  ),
+  tibble(
+    Variable = "Below Poverty Level (%)",
+    Coefficient = coef(poverty_model)[2],
+    `Std. Error` = summary(poverty_model)$coefficients[2, 2],
+    `t-value` = summary(poverty_model)$coefficients[2, 3],
+    `p-value` = summary(poverty_model)$coefficients[2, 4],
+    `Lower CI` = confint(poverty_model)[2, 1],
+    `Upper CI` = confint(poverty_model)[2, 2],
+    `R-squared` = summary(poverty_model)$r.squared
+  )
+)
+
+#table of regression results
+kable(regression_results, 
+      caption = "Table 4: Regression Results: Association between Demographics and PM2.5 Levels",
+      digits = 3) %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"), 
+                full_width = FALSE)
+
+
+
+```
+
+
+
+
+**Table 4** shows the regression analysis result, or the relationships between Hispanic/Latino population and poverty status variables and PM2.5 concentrations, respectively. 
+
+The regression analysis of the Hispanic/Latino population shows a negative association between the percentage of the population that is Hispanic/Latino and mean PM2.5 concentrations. For every 1% increase in the Hispanic/Latino population, mean PM2.5 concentrations decreased by 0.018 ug/m3 (95% CI: -0.045, 0.01; p-value 0.2). However, this relationship was not statistically significant, meaning Hispanic/Latino population percentage is not associated with PM2.5 levels. 
+
+This relationship is visualized in **Figure 8**, a scatterplot of the relationship between Hispanic/Latino population percentage and mean PM2.5 levels (ug/m3), with confidence intervals (shaded area), and showing a slight negative association.
+
+
+In **Table 4**, the regression analysis of the percentage of the population below the poverty level and mean PM2.5 concentration. This regression model revealed a stronger and statistically significant negative association, meaning for every 1% increase in the population below the poverty level, the mean PM2.5 concentrations decreased 0.042 ug/m3 (95% CI: -0.065, -0.02; p-value less than 0.05). This relationship is statistically significant, meaning poverty level is associated with PM2.5 levels during the Cameron Peak fire period in the Fort Collins area.
+
+This relationship is visualized in **Figure 9**, a scatter plot of the second model, showing the relationship between the percentage of the population below the poverty level and the mean PM2.5 concentration (ug/m3), showing a negative association.  This means as percentage of people living below the poverty level increases, the mean PM2.5 concentration tends to decrease, so areas with higher poverty levels tend to have lower average PM2.5 concentrations. 
+
+### Spatial Distribution of PM2.5 During the Cameron Peak Fire
+
+**Figure 3** presents the interpolated PM2.5 concentrations for two key days during the study period: October 10 and October 26, 2020. The spatial patterns revealed by these maps demonstrate substantial variation in PM2.5 levels across Fort Collins. On October 10, elevated concentrations were observed in the northwestern portion of the city, with values reaching 55-60 μg/m³, while other areas experienced more moderate levels. In contrast, the October 26 map shows a different pattern with higher concentrations in the northern region, reaching up to 80-100 μg/m³. These distinct spatial patterns highlight the dynamic nature of wildfire smoke distribution. 
+
+**Figure 5** displays the 61-day mean PM2.5 concentrations by census tract across Larimer County, revealing a clear spatial gradient in long-term smoke exposure. The northeastern portions of the county experienced the highest average PM2.5 concentrations (27.07 to 28.48 μg/m³), while specific census tracts within Fort Collins recorded the lowest average concentrations (24.07 to 24.94 μg/m³). The western regions generally showed moderate concentration levels (25.51 to 26.21 μg/m³).
+This spatial pattern suggests that while the entire county was affected by smoke from the Cameron Peak fire, the impact was not uniform. 
+
+
+## Discussion
+
+This study examined the relationships between sociodemographic factors— specifically Hispanic/Latino population percentage and poverty levels— and PM2.5 concentrations during the Cameron Peak fire period in the Fort Collins area. The findings revealed a significant negative association between poverty levels and PM2.5 exposure, while the relationship with Hispanic/Latino population was negative but not statistically significant. These results provide insights into the spatial distribution of wildfire smoke exposure and raise important questions about environmental justice in the context of wildfire events.
+
+The negative association between poverty levels and PM2.5 concentrations (0.042 μg/m³ decrease for every 1% increase in population below poverty level) contradicts some established environmental justice literature, which often reports higher pollution exposure in lower-income communities (Vargo et al., 2023; Lambrou et al., 2023). This unexpected finding might be explained by several factors specific to the Fort Collins context and Cameron Peak fire characteristics. The spatial gradient observed in the PM2.5 concentration maps (**Figure 4**, **Figure 7**) suggests that geographic and meteorological factors, rather than socioeconomic patterns alone, strongly influenced smoke distribution during th study period. The northeastern portions of Larimer County, which experienced the highest average PM2.5 concentrations, may have different demographic compositions than the areas with lower concentrations within the city limits of Fort Collins (Weeberb et al., 2019).
+
+The daily variations in PM2.5 spatial patterns, illustrated by the contrasting distributions on October 10 versus October 26 (shown in **Figure 3**), highlight the dynamic nature of wildfire smoke. These temporal fluctuations underscore the challenges in assessing long-term exposure disparities during wildfire events. While the cumulative 61-day average provides a useful measure of cumulative exposure, it may mask important short-term variations that could differentially impact vulnerable populations based on daily activities, housing characteristics, and access to filtered air spaces.
+
+Some limitations of this analysis inlcude the fact that it did not account for indoor air quality, which can vary substantially based on housing characteristics and access to air filtration, and would better estimate the cumulative exposure indoor and outdoor of communities. Lower-income residents might experience higher exposure despite lower outdoor concentrations if their housing offers less protection from smoke. Additionally, the spatial interpolation methods rely on a limited number of monitoring sites (11 PurpleAir monitors), which may not fully capture fine-scale variations in air pollution across all neighborhoods, and the reliability of the PurpleAir monitors was not validated. Future research should incorporate additional variables that may help explain the observed patterns, including housing characteristics, indoor/outdoor exposure ratios across different neighborhoods, and behavioral adaptations to smoke events. 
+These findings have important implications for public health interventions and emergency response during wildfire events. While the results did not suggest strong associations between PM2.5 and Hispanic/Latino populations and lower-income populations, the elevated levels of PM2.5 during the study period do suggest the need to consider compounding vulnerabilities that may exist in these communities. As climate change increases the frequency and intensity of wildfires in the western United States understanding the complex relationships between smoke exposure, demographics, and health outcomes becomes increasingly critical for developing equitable adaptation strategies. (US EPA, n.d.). 
+
+
+
+
+
+## References 
+
+Colorado Department of Public Health and Environment [CDPHE]. (n.d.). Wildfire smoke and health. Retrieved March 1, 2025, from https://cdphe.colorado.gov/outdoor-burning/wildfire-smoke-and-health
+
+Lambrou, N., Kolden, C., Loukaitou-Sideris, A., Anjum, E., & Acey, C. (2023). Social drivers of vulnerability to wildfire disasters: A review of the literature. Landscape and Urban Planning, 237, 104797. https://doi.org/10.1016/j.landurbplan.2023.104797
+
+Requia, W. J., Jhun, I., Coull, B. A., & Koutrakis, P. (2019). Climate impact on ambient PM2.5 elemental concentration in the United States: A trend analysis over the last 30 years. Environment International, 131, 104888. https://doi.org/10.1016/j.envint.2019.05.082
+
+US Environmental Protection Agency [EPA]. (n.d.). Climate Change Indicators: Wildfires. Retrieved March 1, 2025, from https://www.epa.gov/climate-indicators/climate-change-indicators-wildfires
+
+Vargo, J., Lappe, B., Mirabelli, M. C., & Conlon, K. C. (2023). Social Vulnerability in US Communities Affected by Wildfire Smoke, 2011 to 2021. American Journal of Public Health, 113(7), 759. https://doi.org/10.2105/AJPH.2023.307286
+

@@ -1,0 +1,678 @@
+---
+title: "Lab Assignment 4"
+output: html_document
+---
+
+
+# On-Road CO vs Monitor CO
+#### Laura Beilsmith
+#### University of Colorado School of Public Health
+#### March 10, 2025
+
+
+
+## Abstract 
+
+This study examines whether on-road carbon monoxide (CO) measurements can reliably predict EPA regulatory monitor CO concentrations in Seattle, Washington (WA). Data from a mobile monitoring campaign conducted over six days in September 2012 was spatially and temporally integrated with measurements from EPA monitoring stations using spatial and statistical analysis. 
+
+After creating a 1000-meter buffer around EPA sites, spatial joining identified that 72 unique on-road monitoring locations fell within proximity of a single EPA monitor. Temporal patterns in on-road CO showed concentrations generally ranging between 0-600 ppb with considerable variability throughout the day, while EPA measurements exhibited more stable patterns. Regression analysis revealed a weak negative relationship between on-road and EPA measurements (estimate of -0.17, p = 0.38, 95% CI: -0.56 to 0.22) that was not statistically significant. 
+
+These findings indicate that mobile and fixed-site monitoring approaches may be capturing different aspects of urban air pollution, highlighting the potential complementary value of mobile monitoring for assessing fine-scale spatial variations and roadside exposure conditions that fixed monitors cannot capture.
+
+## Introduction
+
+Air quality monitoring is an essential component of environmental health surveillance, providing critical data for assessing public exposure to air pollutants and informing regulatory decisions. Traditional monitoring approaches rely heavily on fixed-site stations operated by agencies such as the Environmental Protection Agency (EPA), which provide continuous, high-quality measurements but are limited in their spatial coverage-- for example, there are only three carbon monoxide (CO) monitors in Washington State, leaving gaps in air quality assessment. 
+
+Mobile monitoring is useful to address the limitations of static measurements, potentially capturing fine-scale spatial variations in pollutant concentrations across urban environments. By mounting air quality sensors on vehicles, researchers can collect data along predetermined routes, potentially revealing pollution hotspots and micro-scale gradients that might be missed by the sparse network of fixed monitoring stations (Matthaios et al., 2024). Near-road measurements are also particularly important for pedestrians and residents who live near heavy-traffic roads.
+
+Carbon monoxide (CO) serves as an important indicator of traffic-related air pollution and incomplete combustion processes. While ambient CO levels have decreased significantly in the United States since the implementation of emissions controls on vehicles, localized elevations can still occur in urban environments, particularly along busy roadways and in street canyons where dispersion is limited (EPA, 2023). 
+
+Understanding the relationship between on-road CO concentrations and those measured at nearby regulatory monitoring stations is crucial for assessing the representativeness of fixed-site measurements and evaluating the potential complementary value of mobile monitoring campaigns.
+
+This analysis aims to examine whether hourly on-road carbon monoxide concentrations can serve as reliable predictors of nearby EPA monitor carbon monoxide concentrations in Seattle, Washington. Specifically, the study investigates the spatial and temporal correspondence between mobile measurements collected along a north-south corridor through Seattle and data from an EPA monitoring station located within the sampling area. Through detailed spatial visualization and statistical analysis, this research provides insights into how mobile and fixed-site monitoring data relate to each other in an urban context. 
+
+
+```{r setup, include=FALSE}
+
+#load packages 
+library(tidyverse)
+library(tidyr)
+library(dplyr)
+library(sf)
+library(tmap)
+library(tmaptools)
+library(ggplot2)
+library(lubridate)
+library(RAQSAPI)
+library(ggplot2)
+library(tibble)
+library(knitr)
+library(kableExtra)
+library(broom)
+library(OpenStreetMap)
+library(leaflet)
+library(spaMM)
+library(stars)
+library(tidycensus)
+library(stringr)
+
+
+```
+
+## Methods
+
+### Study Design and Description of Data Sources
+This study examines whether hourly on-road carbon monoxide (CO) concentrations can serve as a reliable predictor for EPA monitor carbon monoxide concentrations in the Seattle, Washington area. Data were collected from an on-road air monitoring campaign and EPA monitoring stations during September 19th through September 25th, 2012 (excluding September 22nd). This analysis focuses on establishing a spatial and temporal relationship between mobile CO measurements and fixed-site regulatory monitoring data. Spatial data processing and visualization were conducted using the sf and tmap packages in R, while statistical analysis was performed using tidyverse packages and linear regression modeling. This analysis aimed to determine the correlation between on-road CO measurements and EPA monitor readings, wich could be used to assess the utility of mobile monitoring as a supplement to traditional regulatory air quality networks. R version 4.4.2 was used for all analyses and visualizations.
+
+
+### Step 1: 
+
+The on-road mobile monitoring dataset "deeds_sept_mobile_data.csv" was loaded into R using the read_csv function with a guess_max argument of 2000 to address formatting issues in the original dataset file. The carbon monoxide concentration values (co.conc) included some negative readings, which were converted to absolute values as they represent measurement artifacts rather than physically meaningful negative concentrations. This step ensured all CO measurements were represented as positive concentration values for subsequent analysis.
+
+```{r Question1}
+###1)	Load in the `deeds_sept_mobile_data.csv` file using read_csv. Set the guess_max argument to 2000 (this solves a stupid formatting problem you don’t need to worry about). Some of the CO concentrations (co.conc) are negative so take the absolute value.
+
+#load the mobile data
+mobile_data <- read_csv("C:/R/deeds_sept_mobile_data.csv", guess_max = 2000)
+
+#absolute value of CO concentrations
+mobile_data <- mobile_data %>%
+  mutate(co.conc = abs(co.conc))
+
+#show first few rows to verify structure 
+head(mobile_data)
+
+
+```
+
+### Step 2: 
+
+To facilitate temporal analysis, date and time variables were extracted from the timestamp information in the dataset. The lubridate package was used to create three distinct temporal variables: date (calendar date only), date_hour (date with hour precision), and date_hour_minute (complete timestamp with minute precision). These new variables enabled analyses at different temporal scales. The dataset was then filtered to retain only the essential columns for analysis: the three temporal variables, geographic coordinates (latitude and longitude), and CO concentration values.
+
+```{r Question2}
+
+### 2)	Determine the date, date+hour, and date+hour:minute of each observation. The lubridate functions ymd_h(), ymd_hm(),as_date(), and/or the stringr function str_replace() may be helpful. In your tibble, keep only the date/time columns you just created, the latitude and longitude columns, and the co.conc column.
+
+#check column names
+colnames(mobile_data)
+
+
+#process the datetime information
+mobile_data_processed <- mobile_data %>% #create the date, date+hour, and date+hour:minute columns
+  mutate(
+    date = as_date(mdy_hm(time)),                #extract just the date
+    date_hour = floor_date(mdy_hm(time), unit = "hour"),  #date with hour
+    date_hour_minute = mdy_hm(time)              #datetime with minutes
+  ) %>%
+
+  select(date, date_hour, date_hour_minute, gps.lat, gps.long, co.conc)
+
+#first few rows of the processed data
+head(mobile_data_processed)
+
+
+
+```
+
+
+### Step 3: 
+
+Temporal patterns in on-road CO concentrations were visualized using a time series plot with the ggplot2 package. The data were faceted by date to create separate panels for each of the six monitoring days (September 19-21 and 23-25, 2012), allowing for examination of diurnal patterns and day-to-day variability.
+
+
+```{r Question3, warning=FALSE}
+
+#3)	Plot the CO concentration vs time of day. Use a separate panel for each date.
+
+#plot of CO concentration and time of day
+ggplot(mobile_data_processed, aes(x = date_hour_minute, y = co.conc)) +
+  geom_point(alpha = 0.5) +  
+  geom_smooth(method = "loess", se = FALSE) +  #trend line
+  facet_wrap(~ date, scales = "free_x") +  #separate panels by date
+  labs(
+    title = "Fig. 1 CO Concentration vs. Time of Day",
+    x = "Time of Day",
+    y = "CO Concentration",
+    caption = "Data from on-road mobile monitoring"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),  
+    strip.background = element_rect(fill = "lightblue"), #color of facet headers
+    strip.text = element_text(size = 12, face = "bold")
+  )
+
+
+```
+
+**Figure 1** displays CO concentration versus time of day, with each panel representing a different date in the sampling period. The visualization reveals that CO concentrations generally ranged between 0-600 ppb (parts per billion) across all monitoring days, with the majority of readings falling between 200-400 ppb. The blue trend lines show some slight decreases in average concentrations during the evening hours (around 18:00-19:00) on some days, particularly September 20. Concentrations appear relatively stable on September 19 and 21, while September 23-25 show more variability with occasional spikes reaching values near 600 ppb during the evening hours of September 25. Overall, the data show point-to-point variability on relatively consistent baseline levels, suggesting that localized emission sources or traffic conditions may create short-term fluctuations in roadside CO levels throughout the sampling period.
+
+
+
+### Step 4: 
+
+The mobile on-road dataset was converted to a spatial (sf) object to enable geospatial analysis. Rows with missing coordinate values were first filtered out using the filter function to ensure data integrity and prevent spatial errors. The sf package was used to transform the data into a spatial object using the st_as_sf function, which converts the latitude and longitude into point geometry, with the coordinate reference system specified as EPSG:4326 (WGS84).  
+
+After creating the spatial object, the original coordinate values were reattached as attribute columns, preserving the latitude and longitude values as separate columns, allowing them to serve as location identifiers for subsequent joins and analyses while retaining the spatial geometry for mapping and spatial operations. A comparison of row counts between the original processed dataset and the spatial dataset revealed that several observations were removed due to missing coordinate data, ensuring that only complete spatial records were retained for subsequent analysis.
+
+```{r Question4}
+
+## 4)	Make the tibble into an sf object. Bind the latitude and longitude into their own columns (these together will serve as a location ID). Assume the CRS is EPSG:4326.
+
+#data to an sf object, removing rows with NA coordinates
+mobile_data_sf <- mobile_data_processed %>%
+  #remove rows with missing coordinates
+  filter(!is.na(gps.lat) & !is.na(gps.long)) %>%
+  #Create an sf object from the latitude and longitude columns
+  st_as_sf(coords = c("gps.long", "gps.lat"), crs = 4326) %>%
+  #latitude and longitude as their own columns for reference/ID
+  mutate(
+    longitude = st_coordinates(.)[,1],
+    latitude = st_coordinates(.)[,2]
+  )
+
+#structure of the spatial object
+head(mobile_data_sf)
+
+#how many rows were removed due to missing coordinates?
+nrow(mobile_data_processed) - nrow(mobile_data_sf)
+
+
+```
+
+
+
+### Step 5: 
+
+A non-spatial version of the dataset was created by extracting all attribute data from the spatial object while removing the geometry component. A non-spatial version of the dataset was created by extracting all attribute data from the spatial object while removing the geometry component to facilitate conventional data manipulation and analysis operations that do not require explicit spatial functionality.
+
+```{r Question5}
+
+### 5)	Create a new tibble based on your sf object with the geometry dropped
+
+#creating a new tibble with geometry dropped
+mobile_data_no_geom <- mobile_data_sf %>%
+  st_drop_geometry()
+
+#checking the structure of the new tibble with no geom
+head(mobile_data_no_geom)
+str(mobile_data_no_geom)
+
+
+
+```
+
+
+
+### Step 6: 
+
+To identify the unique spatial sampling locations within the mobile monitoring campaign, a dedicated spatial object was created that removed temporal and measurement redundancy. Only the latitude and longitude columns along with the geometry column. Only unique locations where on-road measurements were kept in this dataset, reducing the size of the dataset. 
+
+```{r Question6}
+
+### 6)	Create a new sf object with only the unique latitude and longitude columns and the geometry.
+
+#new sf object with only unique locations
+unique_locations_sf <- mobile_data_sf %>%
+  
+  select(latitude, longitude) %>% #keep only unique combinations of latitude and longitude
+  distinct()
+
+#result
+head(unique_locations_sf)
+nrow(unique_locations_sf)  #how many unique locations we have
+
+
+```
+
+
+### Step 7:
+
+To establish a comparison with regulatory monitoring data, hourly carbon monoxide measurements from EPA air quality stations in Washington State were acquired using the RAQSAPI package. First, the temporal range of the mobile monitoring campaign was determined by identifying the minimum and maximum dates in the processed mobile dataset. These date boundaries were used to constrain the EPA data request to ensure temporal alignment between the two datasets. The aqs_sampledata_by_state function was then called with specific parameters: the CO parameter code (42101), the calculated start and end dates, and the Washington State FIPS code (53). This query retrieved all hourly CO measurements from regulatory monitoring stations throughout Washington State during the mobile monitoring period.
+
+The retrieved EPA data was then processed to align its structure with the mobile dataset format.Two temporal variables were created: a date variable derived from the date_local field and a date_hour variable constructed by combining date_local and time_local fields and rounding to the nearest hour using the floor_date function. 
+
+Additionally, a unique site identifier (site_id) was created by concatenating the county_code and site_number fields. Finally, the EPA data was converted into an sf object, transforming the longitude and latitude columns into point geometry with the WGS84 coordinate reference system (EPSG:4326).
+
+```{r Question7}
+
+### 7)	Using aqs_sampledata_by_state() function in RAQSAPI package, download hourly carbon monoxide data for Washington State for the same set of days as the mobile monitoring campaign and make them into an sf object. Create date and date+hour variables based on the date_local and time_local variables. Create a Site ID variable using the county_code and site_number variables.
+
+
+####this takes FOREVER only run it once when needed
+
+#extract unique dates from mobile monitoring data to use for filtering
+unique_dates <- unique(as.character(mobile_data_processed$date))
+
+#date range - find min and max dates in the mobile data
+start_date <- min(mobile_data_processed$date)
+end_date <- max(mobile_data_processed$date)
+
+#Set RAQSAPI credentials 
+aqs_credentials(username = "laura.2.beilsmith@cuanschutz.edu", key = "amberwolf16")
+
+#dowloadin hourly CO data for Washington state (state code 53)
+epa_co_data <- aqs_sampledata_by_state(
+  parameter = "42101",  #CO parameter code
+  bdate = start_date,   #Beginning date
+  edate = end_date,     #Ending date
+  stateFIPS = "53",     #Wa state code
+  return_header = FALSE
+)
+
+#process the EPA data date and time esp to match your mobile data format
+epa_co_sf <- epa_co_data %>%
+  mutate(
+    date = as_date(date_local),
+    date_hour = floor_date(ymd_hm(paste(date_local, time_local)), "hour")
+  ) %>%
+
+  mutate(site_id = paste0(county_code, "-", site_number)) %>%
+
+  st_as_sf(coords = c("longitude", "latitude"), crs = 4326)
+
+#look at structure of the EPA data
+head(epa_co_sf)
+
+
+```
+
+
+### Step 8: 
+
+A spatial buffer analysis was performed to define the areas of influence around each EPA carbon monoxide monitoring station. First, the number of unique monitoring stations was calculated by applying the distinct function to the site_id column of the EPA spatial dataset, revealing three distinct CO monitoring locations across Washington State. Using the st_buffer function from the sf package, a 1000-meter circular buffer was generated around each monitoring location. A map of the unique locations is shown in **Figure 2**. 
+
+
+```{r Question8again}
+
+
+### 8)	Use st_buffer() to create a 1000m buffer around the EPA monitor data.
+
+
+#how many unique monitor locations
+n_monitors <- epa_co_sf %>%
+  select(site_id) %>%
+  distinct() %>%
+  nrow()
+
+print(paste("Number of unique EPA CO monitors:", n_monitors))
+
+
+#create 1000m buffers around EPA monitors
+epa_co_buffer_sf <- epa_co_sf %>%
+  # Create a 1000m buffer around each point
+  st_buffer(dist = 1000)
+##have to keep this 
+
+
+#set tmap to interactive mode
+tmap_mode("plot")
+
+#tmap_options_reset()
+
+
+#set map to cover entire state of Washington
+wa_bbox <- st_bbox(c(xmin = -124.8, xmax = -116.9, ymin = 45.5, ymax = 49.0), crs = 4326)
+#changing bounding box for the purposes of mapping the EPA CO locations
+
+#create a static map with the custom bounding box
+tm_shape(epa_co_buffer_sf, bbox = wa_bbox) +
+  tm_polygons(col = "black", alpha = 0.5) +
+  tm_shape(epa_co_sf) +
+  tm_dots(col = "black", size = 0.8) +
+  tm_basemap("OpenStreetMap") +
+  tm_compass(position = c("right", "top")) +
+  tm_scale_bar(position = c("left", "bottom")) +
+  tm_layout(title = "Fig. 2 EPA CO Monitors in Washington with 1000m Buffers",
+            title.position = c("center", "top"),
+            legend.position = c("right", "bottom"),
+            frame = TRUE)
+
+```
+
+**Figure 2** shows the EPA CO monitoring stations across WA in their associated 1000 meter buffers. The monitoring stations are distributed across the state, with locations in the western coastal region, central region, and eastern portion of Washington. A custom bounding box was defined to ensure the entire state was visible in the map view.
+
+
+### Step 9: 
+
+A non-spatial version of the EPA monitoring dataset was created to facilitate conventional data manipulation operations and prepare for data joining procedures. Using the st_drop_geometry function from the sf package, the spatial geometry component was removed from the EPA spatial object (epa_co_sf) while preserving all attribute data. 
+
+```{r Question9}
+
+### 9)	Create a new tibble based on the EPA sf object with the geometry dropped.
+
+#create a new tibble based on EPA sf object with geometry dropped
+epa_co_no_geom <- epa_co_sf %>%
+  st_drop_geometry()
+
+# structure of the new tibble
+head(epa_co_no_geom)
+
+```
+
+
+### Step 10: 
+
+To create a simplified spatial representation of the EPA monitoring network, a new spatial object containing only unique monitoring locations was created. Only Site_ID and the geometry columns were preserved of unique EPA sites (eliminating duplicates). This dataset provided a representation of the EPA monitoring infrastructure that could be efficiently combined with the mobile monitoring locations in later spatial analyses.
+
+```{r Question 10}
+
+### 10) Create a new sf object with only unique EPA site IDs and their geometries
+
+epa_unique_sites_sf <- epa_co_sf %>%
+  #Select only the site_id column
+  select(site_id) %>%
+  #keep only unique combinations of site_id and geometry
+  distinct()
+
+#result
+head(epa_unique_sites_sf)
+nrow(epa_unique_sites_sf)  # See how many unique EPA sites we have
+
+
+
+```
+
+### Step 11: 
+
+A base map was created to establish the geographic context for the mobile monitoring study area using the tmap package. OpenStreetMap was selected as the base layer through tm_basemap to provide relevant urban context including road networks, waterways, and landmarks essential for interpreting the spatial patterns of mobile monitoring data, shown in **Figure 3**. 
+
+```{r Question11}
+
+### 11)	Using tmaptools, create a base map covering the area of the on-road sf object.
+
+#different approach
+#static map
+tmap_mode("plot")
+
+#base map using the bbox from the mobile data
+base_map <- tm_shape(mobile_data_sf) +
+  tm_borders(alpha = 0) +  #Invisible border to set extent
+  tm_basemap("OpenStreetMap") +
+  tm_layout(
+    title = "Fig 3. Base Map for On-Road Monitoring Area",
+    title.size = 1.2,
+    title.position = c("center", "top"),
+    frame = TRUE,
+    component.autoscale = FALSE
+  )
+
+#display
+base_map
+
+
+###########
+
+
+```
+
+**Figure 3** displays the base map for the on-road monitoring area, an elongated north-south corridor through the Seattle, WA area. This base map provides important context for interpreting CO measurements, as the monitoring route traverses areas with varying traffic density, road configurations, and built environment characteristics. 
+
+
+
+### Step 12
+
+The on-road CO measurements and EPA monitoring stations were visualized together in a spatially and temporally integrated map series using the tmap package. To prepare the data for faceting by date, both the mobile and EPA datasets were processed to ensure consistent date formatting by converting the date fields to character strings, preventing potential issues with date representation across facets. 
+
+A multi-layered map was then constructed (**Figure 4** with the mobile monitoring data as the primary layer, represented as colored dots symbolized according to CO concentration values using a red color gradient. The tm_facets function was applied to create separate panels for each of the six monitoring days (September 19-21 and 23-25, 2012), enabling visual assessment of spatial patterns across different dates.
+
+```{r clean12, fig.width=12, fig.height=10}
+
+### 12)	Map the on-road data and the EPA monitor data onto the base map. Use tm_facets() to show each date separately.
+
+###this one works, run this one because at least it gives you something for 12
+
+
+#checking unique locations of EPA monitors
+unique_epa_coords <- st_coordinates(epa_co_sf) %>% as.data.frame()
+
+
+
+#date formatted correctly
+mobile_data_sf <- mobile_data_sf %>%
+  mutate(date = as.character(date))  # Convert to character to avoid facet issues
+
+epa_co_sf <- epa_co_sf %>%
+  mutate(date = as.character(date))  # Convert to character to match mobile data
+
+#static map mode for tmap
+tmap_mode("plot")
+
+#OpenStreetMap basemap faceted by date
+tm_shape(mobile_data_sf) +
+  tm_dots(col = "co.conc", palette = "Reds", size = 0.5, alpha = 0.6, title = "On-Road CO") +
+  tm_facets(by = "date", free.coords = TRUE, n.col = 6) +  # Facet by correct date format
+  tm_shape(epa_co_sf) +
+  tm_dots(col = "black", size = 0.7, title = "EPA CO Monitor") +
+  tm_text("003-0080", size = 1.0, col = "black", xmod = 5, ymod = 0.7) +
+  tm_shape(epa_unique_sites_sf) +
+  tm_polygons(col = "black", alpha = 0.3, border.col = "black") +
+  # tm_facets(by = "date", free.coords = TRUE) +  #correct date format-facet by this
+  tm_basemap("OpenStreetMap") +  # OSM basemap
+  tm_layout(
+    main.title = "Fig 4. On-Road CO vs. EPA CO Monitors Over Time",  #Single main title
+    main.title.size = 1.5,  #Increase title size
+    legend.outside = TRUE,  #Move legend outside
+    legend.outside.position = "right",  #Position legend on the right
+    panel.labels = unique(mobile_data_sf$date),  #Ensure proper date labeling
+    frame = FALSE,
+    legend.title.size = 1.2 
+  )
+```
+
+**Figure 4** is a comprehensive visualization of the spatial relationship between on-road CO measurements (red graduated color scheme of CO concentration with light pink meaning low concentrations and dark red meaning high concentrations, along a north-south corridor) and a EPA monitoring station (black dot, site ID 003-0080) in central Seattle. Only one EPA monitoring station is near the study area of interest, as shown in **Figure 2**. 
+
+The maps show varying spatial patterns of CO concentrations across different days. September 19 exhibits relatively moderate concentrations throughout the corridor, while September 20 shows elevated concentrations (orange to red) along several segments, particularly in the central and northern portions of the route.
+
+September 23-25 continue to show elevated concentrations along certain route segments, with September 25 exhibiting the highest concentrations (dark red) in the northern portion of the route. Notably, the mobile monitoring route passes directly through the EPA monitor's buffer zone on all six days, enabling the spatio-temporal comparison. 
+
+
+
+### Step 13
+
+A spatial join was performed to identify which on-road monitoring locations fall within proximity of EPA monitoring stations. The EPA monitoring locations from Step 10 were then buffered with a 1000-meter radius using st_buffer, creating polygon areas that represent the zones of potential spatial correspondence between the two monitoring approaches. Both coordinate references systems were ensured to be EPSG:4326. 
+
+The spatial join was executed using the st_join function with the left=FALSE parameter, which performs an inner join that retains only the on-road locations that intersect with EPA buffer zones. This approach effectively filtered the on-road measurements to identify only those that were collected within 1000 meters of an EPA monitoring station.
+
+After the join operation, the geometry column was removed using st_drop_geometry to create a non-spatial table, and the dataset only retained the essential columns: latitude, longitude, and EPA monitor site ID. 
+
+The resulting spatial relationship revealed that 72 unique on-road monitoring locations fell within 1000 meters of an EPA monitoring station, all associated with a single EPA site identified as "033-0080". This finding confirms that only one EPA monitor had spatial overlap with the mobile monitoring campaign, despite there being three CO monitors across Washington State. 
+
+```{r question13again}
+
+### 13)	Use st_join(…,…,left=FALSE) to spatially join the two unique location sf objects (from Steps 6 and 10). Drop the geometry of the resulting object. The result is a key that links on-road measurements (identified by their latitude and longitude) to EPA monitor sites (identified by the site ID you created in Step 7). You should find that only one EPA monitor is within 1000m of any of the on-road measurements.
+
+nrow(unique_locations_sf)  #checking number of on-raod monitoring locations
+nrow(epa_unique_sites_sf)  #number of EPA monitor sites
+
+#CRS should be (EPSG:4326) for both before we move forward
+unique_locations_sf <- st_transform(unique_locations_sf, 4326)
+epa_unique_sites_sf <- st_transform(epa_unique_sites_sf, 4326)
+
+#Apply a 1000m buffer to EPA sites
+epa_buffered_sf <- st_buffer(epa_unique_sites_sf, dist = 1000)
+
+#perform the spatial join (keeping only matches within 1000m)
+#unique location_Sf is from step 6 
+#epa_buffered_sf is from Step 10
+onroad_to_epa_joined <- st_join(unique_locations_sf, epa_buffered_sf, left = FALSE)
+
+#drop the geometry to create the final key
+onroad_to_epa_key <- onroad_to_epa_joined %>%
+  st_drop_geometry() %>%
+  select(latitude, longitude, site_id)  # Keep only necessary columns
+
+#result
+print(onroad_to_epa_key)
+
+nrow(onroad_to_epa_key)  #should be 72
+unique(onroad_to_epa_key$site_id)  #Should only contain "033-0080"
+
+
+
+
+```
+
+
+### Step 14
+
+A spatio-temporal merge was then performed to identify measurements from both monitoring approaches that coincided in both space and time. This process combined the spatial relationship established in Step 13 with the temporal dimensions of both datasets through a sequence of data joining operations. First, the date_hour field in the EPA dataset (epa_co_no_geom) was standardized by reconstructing it from the date_local and time_local fields and explicitly formatting it as a POSIXct object with UTC timezone to ensure consistent temporal representation across datasets.
+
+The non-spatial mobile monitoring data (mobile_data_no_geom from Step 5) was joined with the spatial relationship key (onroad_to_epa_key from Step 13) using an inner_join operation based on matching latitude and longitude coordinates. This join effectively filtered the mobile data to include only those measurements collected at locations within 1000 meters of an EPA monitoring station, while attaching the corresponding EPA site identifier to each qualifying mobile measurement. The resulting intermediate dataset (onroad_with_key) retained all temporal and measurement attributes from the mobile campaign but was restricted to only those locations with spatial relevance to EPA sites.
+
+
+To ensure proper temporal alignment for the second joining stage, the date_hour fields in both the intermediate dataset and the EPA dataset were standardized as POSIXct objects with consistent formatting and timezone. The second inner_join operation then combined the spatially-filtered mobile data with the EPA monitoring data based on matching site_id and date_hour values. This operation created the final spatio-temporal merged dataset (spatio_temporal_merged) containing only those measurements from both sources that were collected within 1000 meters of each other and during the same hour. The resulting dataset represents the subset of measurements where direct comparisons between on-road and EPA monitoring approaches are valid based on both spatial proximity and time/date. 
+
+
+
+```{r cleanfor14}
+
+
+### 14)	Use two inner_joins() to combine the key from Step 13 with the tibbles in Steps 5 and 9. The data should be joined by the latitude/longitude of the on-road data, the site ID of the monitor data, and the date+hour of both. You have now performed an spatio-temporal merge! 
+
+
+#Step 1: `date_hour` is correctly formatted in `epa_co_no_geom`
+epa_co_no_geom <- epa_co_no_geom %>%
+  mutate(
+    date_hour = as.POSIXct(paste(date_local, time_local), format = "%Y-%m-%d %H:%M", tz = "UTC")
+  )
+
+#Step 1.5; make sure merging on-road data with spatial key we already created
+##finally, let's try the inner join again: 
+#first join: Merge on-road data with the spatial key
+onroad_with_key <- inner_join(mobile_data_no_geom, onroad_to_epa_key, 
+                              by = c("latitude", "longitude"))
+
+#Step 2: Standardize `date_hour` as `POSIXct` in both datasets
+onroad_with_key <- onroad_with_key %>%
+  mutate(date_hour = as.POSIXct(date_hour, format = "%Y-%m-%d %H:%M", tz = "UTC"))
+
+epa_co_no_geom <- epa_co_no_geom %>%
+  mutate(date_hour = as.POSIXct(date_hour, format = "%Y-%m-%d %H:%M", tz = "UTC"))
+
+#Step 3: Perform First `inner_join()` (On-Road Data + Spatial Key)
+onroad_with_key <- inner_join(mobile_data_no_geom, onroad_to_epa_key, 
+                              by = c("latitude", "longitude"))
+
+#Step 4: Perform Second `inner_join()` (With EPA CO Monitor Data)
+spatio_temporal_merged <- inner_join(onroad_with_key, epa_co_no_geom, 
+                                     by = c("site_id", "date_hour"))
+
+#Step 5: View the Final Merged data
+print(spatio_temporal_merged)
+
+
+
+```
+
+
+### Step 15
+
+A linear regression analysis was conducted to quantify the relationship between on-road and EPA monitor carbon monoxide measurements. A critical unit conversion was performed to address the discrepancy between measurement scales: the on-road CO concentrations were originally recorded in parts per billion (ppb), while the EPA monitor data were in parts per million (ppm). To establish a valid comparison, a new variable "onroad_ppm" was created by dividing the on-road values by 1000, converting from ppb to ppm.
+
+The linear regression model was specified with the EPA monitor CO concentration as the outcome variable and the converted on-road CO concentration as the predictor variable, using the formula monitor ~ onroad_ppm. The model was fitted using the lm function, and the results were processed with the tidy function from the broom package. The results of this regression are shown in **Table 1**. 
+
+```{r Question15}
+
+### 15)	Using the merged data, regress the on-road concentration against the EPA data using lm(monitor ~ onroad,data=…). Tidy the result.
+
+
+
+#rename columns for clarity
+spatio_temporal_merged <- spatio_temporal_merged %>%
+  rename(onroad = co.conc, monitor = sample_measurement)  # Assuming `sample_measurement` is EPA CO data
+
+
+
+#EPA data is PPM, the mobile data is probably in ppb, need to adjust for this discrepancy
+spatio_temporal_merged_units <- spatio_temporal_merged %>%
+  mutate(onroad_ppm = onroad / 1000)  # Convert from PPB to PPM
+
+
+#run the regression
+model <- lm(monitor ~ onroad_ppm, data = spatio_temporal_merged_units)
+
+#use tidy model to tidy the results
+tidy_model <- tidy(model)
+
+#add CIs
+tidy_model <- tidy(model, conf.int = TRUE, conf.level = 0.95)
+
+#print regression output
+print(tidy_model)
+
+
+```
+
+
+```{r Question15Table}
+
+
+#rename columns for clarity
+tidy_model_clean <- tidy_model %>%
+  rename(
+    Term = term,
+    Estimate = estimate,
+    `Standard Error (SE)` = std.error,
+    `Test Statistic` = statistic,
+    `p-value` = p.value,
+    `Lower 95% CI` = conf.low,
+    `Upper 95% CI` = conf.high
+  )
+
+#formatted table for HTML output
+tidy_model_clean %>%
+  kable(format = "html", digits = 3, caption = "Table 1. Regression Results: On-Road CO vs. EPA CO") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), full_width = FALSE)
+
+
+
+```
+
+
+## Results 
+
+### Step 16
+
+**Table 1** shows the regression results for relationship between the on-road CO measurements and EPA CO measurements.
+
+The regression coefficient for on-road CO concentration (-0.17, p = 0.38, CI: -0.56, 0.22) indicates a weak negative relationship between on-road and EPA monitor measurements, but this association is not statistically significant based on the high p-value and confidence interval that includes zero. The negative coefficient suggests that higher on-road concentrations are actually associated with lower EPA monitor readings, contrary to what would be expected if the two measurement approaches were capturing the same pollution patterns. 
+
+Based on these results, on-road CO measurements do not appear to be a good predictor of nearby EPA monitor CO concentrations within this study context. The non-significant relationship, negative coefficient direction, and wide confidence interval all suggest a poor correspondence between the two measurement approaches. This discrepancy might be attributed to several factors, including differences in immediate vehicle emissions, different averaging times, instrument calibration, or spatial dynamics of CO dispersion in urban environments. 
+
+Additionally, **Figure 2** demonstrated the limited spatial coverage of EPA CO monitoring in Washington State, with only three monitors across the entire state and just one (site ID "033-0080") within proximity of the mobile monitoring route. This sparse regulatory network highlights why supplementary monitoring approaches like mobile sampling might be valuable, despite the lack of direct correlation found in this analysis.
+
+**Figures 3 and 4** illustrated the spatial context of the study, revealing that mobile monitoring was conducted along a north-south corridor through Seattle, with varying CO concentration patterns across different sampling days. The visualization in **Figure 4** showed that while mobile measurements were collected within the 1000-meter buffer zone of EPA monitor "033-0080," the spatial distribution of CO concentrations was highly variable, with hotspots likely influenced by local traffic conditions and urban canyon effects that may not be reflected in the fixed-site measurements.
+
+These findings highlight the challenges of using mobile monitoring as a direct proxy for regulatory monitoring stations and suggest that these approaches may be capturing different aspects of urban air pollution that are not directly comparable without accounting for additional factors like meteorology, traffic patterns, and vertical pollution gradients.
+
+
+
+## Discussion
+
+This study investigated whether hourly on-road carbon monoxide concentrations can serve as reliable predictors of nearby EPA monitor carbon monoxide concentrations in Seattle. The findings revealed a weak negative relationship between on-road and EPA monitor measurements that was not statistically significant (estimate of -0.17, p = 0.38, 95% CI: -0.56 to 0.22). These results provide insights into the complex relationship between mobile and fixed-site monitoring approaches and have implications for how supplementary monitoring methods like mobile on-road data might complement traditional regulatory networks like static EPA monitors. 
+
+The lack of significant correlation between on-road and EPA monitor CO measurements contradicts the intuitive expectation that these different monitoring approaches would capture similar pollution patterns when in close proximity. This discrepancy might be explained by several factors specific to the urban environment and monitoring methodologies. The temporal patterns observed in on-road CO concentrations (Figure 1) showed considerable variability throughout the day, with measurements typically ranging from 0-600 ppb. This high variability suggests that mobile monitors are capturing micro-scale pollution events and localized concentration gradients that may be averaged out or missed entirely by fixed-site monitors.  
+
+The spatial context of the study, illustrated in Figures 3 and 4, demonstrates that while mobile monitoring was conducted within the 1000-meter buffer zone of EPA monitor "033-0080," the spatial distribution of CO concentrations along the north-south corridor through Seattle varied considerably across different sampling days. These spatial differences  highlights the challenge of comparing point measurements from fixed sites with the continuous sampling approach of mobile monitoring. The mobile measurements likely reflected immediate roadside conditions influenced by traffic density, congestion patterns, and street canyon effects, while the EPA monitor, positioned away from immediate roadside influences, may have measured more general urban background levels (Thaker et al., 2016; Dai et al., 2022).
+
+Some limitations of this analysis include the restricted temporal coverage (six days in September 2012) and the focus on a single EPA monitoring station within the study area. The analysis also did not account for vertical gradients in CO concentrations, which can be substantial in urban environments where street-level concentrations may differ significantly from those at the height of fixed monitors. Additionally, meteorological factors such as wind speed, wind direction, and atmospheric stability, which can strongly influence pollutant dispersion and the relationship between different monitoring approaches, were not incorporated into the analysis (Ruan et al., 2021).
+
+These findings have important implications for air quality monitoring strategies in urban environments. While on-road mobile monitoring may not serve as a direct proxy for EPA monitor readings, it offers complementary information on fine-scale spatial variations and roadside exposure conditions that fixed-site monitors cannot capture. The lack of correlation between the two approaches suggests they may be measuring different aspects of urban air pollution, with mobile monitoring potentially providing more relevant data for assessing exposure during transit or in roadside environments.
+
+Future research in this area could incorporate additional variables that may help explain the observed patterns, including meteorological conditions, traffic density, road configuration, and vertical pollution profiles. Expanding the temporal coverage and including multiple EPA monitoring stations could also provide a more comprehensive assessment of the relationship between mobile and fixed-site monitoring approaches.  
+
+
+
+## References 
+
+Dai, Y., Cai, X., Zhong, J., & MacKenzie, A. R. (2022). Chemistry, street canyon geometry, and emissions effects on NO2 “hotspots” and regulatory “wiggle room.” Npj Climate and Atmospheric Science, 5(1), 1–11. https://doi.org/10.1038/s41612-022-00323-w
+
+Matthaios, V. N., Knibbs, L. D., Kramer, L. J., Crilley, L. R., & Bloss, W. J. (2024). Predicting real-time within-vehicle air pollution exposure with mass-balance and machine learning approaches using on-road and air quality data. Atmospheric Environment, 318, 120233. https://doi.org/10.1016/j.atmosenv.2023.120233
+
+Ruan, H.-L., Deng, W.-S., Wang, Y., Chen, J.-B., Hong, W.-L., Ye, S.-S., & Hu, Z.-J. (2021). Carbon monoxide poisoning: A prediction model using meteorological factors and air pollutant. BMC Proceedings, 15(1), 1. https://doi.org/10.1186/s12919-021-00206-7
+
+Thaker, P., & Gokhale, S. (2016). The impact of traffic-flow patterns on air quality in urban street canyons. Environmental Pollution, 208, 161–169. https://doi.org/10.1016/j.envpol.2015.09.004
+
+US EPA, O. (2016, May 4). Carbon Monoxide Trends [Data and Tools]. https://www.epa.gov/air-trends/carbon-monoxide-trends
+

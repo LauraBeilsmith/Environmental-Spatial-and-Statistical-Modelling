@@ -1,0 +1,1030 @@
+---
+title: "Lab Assignment 6"
+output: html_document
+---
+
+#  Climate Projections
+#### Laura Beilsmith
+#### University of Colorado School of Public Health
+#### March 31, 2025
+
+
+
+## Abstract 
+
+This study evaluates projected changes in temperature and precipitation in Colorado for the future time period 2061–2080 under two greenhouse gas emissions scenarios: SSP2 RCP4.5 (moderate emissions) and SSP5 RCP8.5 (high emissions). Climate projections from CMIP6 were analyzed using spatial data processing, visualization, and regression modeling to assess how emissions trajectory and model selection influence future climate outcomes.
+
+Analysis of mean annual temperature rasters revealed a consistent warming trend across the state under both scenarios, with SSP5 RCP8.5 projecting statewide temperature increases of approximately 1.5–2.0 Celsius relative to SSP2 RCP4.5. Regression analysis confirmed a significant positive association between emissions scenario and projected median temperature, meaning projected median temperatures under the high-emissions scenario are 1.50 C higher than in the moderate-emissions scenario (estimate = 1.50, p < 0.001, 95% CI: 0.95 to 2.03), while differences between climate models were not statistically significant. In contrast, projected changes in precipitation were spatially variable and of smaller magnitude, with localized increases of 10–40 mm under the high-emissions scenario but no consistent statewide pattern.
+
+These findings indicate that emissions scenario plays a dominant role in shaping future temperature conditions in Colorado, while precipitation projections remain uncertain and spatially heterogeneous. The results emphasize the importance of mitigation efforts to limit future warming and underscore the value of scenario-based modeling for regional climate planning.
+
+
+## Introduction
+
+Projected changes in climate conditions are critical for informing state and regional level climate adaptations, especially in areas vulnerable to warming and water availability shifts (Nik & Perera, 2020). Colorado is expected to experience substantial changes in temperature and precipitation patterns in the coming decades due to anthropogenic climate change (U.S. EPA, 2016). Understanding how these projections vary by emissions scenario is essential for assessing future climate risk, guiding resource management, and informing emissions policy.
+
+The Coupled Model Intercomparison Project Phase 6 (CMIP6) provides climate projections from an array of global climate models under various Shared Socioeconomic Pathways (SSPs), each reflecting different trajectories of greenhouse gas emissions. Two widely used scenarios, developed by climate scientists, economists, and modelers for the Intergovernmental Panel on Climate Change's Fifth Assessment Report were used for this analysis; also called RCPs or Representative Concentration Pathways, SSP2 RCP4.5, a stabilization pathway assuming moderate mitigation, and SSP5 RCP8.5, a high-emissions scenario with continued fossil fuel use. While the overall trend toward warming is well-established, the magnitude and spatial distribution of projected changes remain uncertain, particularly for variables such as precipitation that exhibit high variability (Saunders & Easley, 2018).
+
+This study evaluates projected changes in mean annual temperature and precipitation in Colorado between 2016-2080 using CMIP6 model outputs under SSP2 RCP4.5 and SSP5 RCP8.5 scenarios. The analysis compares spatial patterns, quantifies differences between scenarios, and uses linear regression to assess the influence of emissions scenario and climate model on projected median temperature. By combining spatial visualization with statistical analysis, this study provides insight into how future climate conditions in Colorado differ depending on emissions pathway.
+
+
+
+```{r setup, include=FALSE}
+
+#load packages 
+library(tidyverse)
+library(tidyr)
+library(dplyr)
+library(sf)
+library(tmap)
+library(tmaptools)
+library(ggplot2)
+library(lubridate)
+library(RAQSAPI)
+library(ggplot2)
+library(tibble)
+library(knitr)
+library(kableExtra)
+library(broom)
+library(OpenStreetMap)
+library(leaflet)
+library(spaMM)
+library(stars)
+library(tidycensus)
+library(stringr)
+library(doParallel)
+library(foreach)
+library(geodata)
+
+```
+
+## Methods
+
+### Study Design and Description of Data Sources
+
+This study investigates projected changes in mean annual temperature and precipitation in Colorado for the period 2061–2080 under two greenhouse gas emissions scenarios: SSP2 RCP4.5 (moderate emissions) and SSP5 RCP8.5 (high emissions). Climate projections were obtained from the CMIP6, or standardized climate model outputs under multiple emissions pathways. The BCC-CSM2-MR model was selected for spatial raster analysis, while a broader set of CMIP6 models was used for comparative statistical modeling.
+
+Temperature and precipitation projections were retrieved as raster datasets using the cmip6_world() function from the geodata package in R. Spatial boundaries for U.S. states were obtained from the Global Administrative Areas (GADM) database. All raster layers were cropped to the state of Colorado. All temperature measurements are in Celsius (C) and precipitation measurements in millimeters (mm). All analyses were conducted in R version 4.4.2.  
+
+
+### Step 1 
+
+CMIP6 climate projections were downloaded from the geodata.ucdavis.edu portal using the cmip6_world() function. Two future emissions scenarios were selected for comparison: SSP2 RCP4.5 (moderate emissions) and SSP5 RCP8.5 (high emissions), for the period 2061–2080. The BCC-CSM2-MR global climate model was used, and all 19 standard climatic variables (var = "bioc") were retrieved at a spatial resolution of 2.5 arc-minutes. 
+
+```{r Q1}
+
+### 1)	Download the projections for the “BCC-CSM2-MR” model at 2.5 arc-second resolution for the period 2061-2080 under RCP4.5 and RCP8.5.
+
+#download projections for SSP2 RCP4.5 (moderate emissions)
+cmip6_world(model = "BCC-CSM2-MR", 
+            ssp = "245",  # SSP2-4.5 for moderate emissions
+            time = "2061-2080", 
+            var = "bioc",   # Grab 19 most common climate variables
+            res = 2.5,      # Spatial resolution in arc-minutes
+            path = "projections")
+
+#downloading projections for SSP5 RCP8.5 (high emissions)
+cmip6_world(model = "BCC-CSM2-MR", 
+            ssp = "585",  # SSP5-8.5 for high emissions
+            time = "2061-2080", 
+            var = "bioc",   # Grab 19 most common climate variables
+            res = 2.5,      # Spatial resolution in arc-minutes
+            path = "projections")
+
+```
+
+
+### Step 2 
+
+Raster files for average temperature were loaded from both climate projections, using the read_stars() function, with the first layer (BIO1, mean annual temperature in Celsius) being extracted from each. The data types and coordinate reference systems (CRS) of the rasters were inspected to ensure compatibility and comparison across projections in later analyses.
+
+```{r Q2}
+
+### 2)	Load the raster for the average temperature variable (“bio1”) for both of these projections.
+
+
+#load in the projections for 4.5 
+annual_T_SSP2_4.5 <- read_stars("C:/R/projections/climate/wc2.1_2.5m/wc2.1_2.5m_bioc_BCC-CSM2-MR_ssp245_2061-2080.tif")[,,,1]
+
+#load in projections for 8.5 (higher emissions)
+annual_T_SSP5_8.5 <- read_stars("C:/R/projections/climate/wc2.1_2.5m/wc2.1_2.5m_bioc_BCC-CSM2-MR_ssp585_2061-2080.tif")[,,,1]
+
+
+#class of the loaded data
+class(annual_T_SSP2_4.5)
+class(annual_T_SSP5_8.5)
+
+#view metadata to confirm that the data corresponds to "bio1"
+st_dimensions(annual_T_SSP2_4.5)
+st_dimensions(annual_T_SSP5_8.5)
+
+
+
+
+#check they are the same CRS
+
+# crs_SSP2_4.5 <- st_crs(annual_T_SSP2_4.5)
+# crs_SSP5_8.5 <- st_crs(annual_T_SSP5_8.5)
+
+#are the CRS identical?
+#identical(crs_SSP2_4.5, crs_SSP5_8.5)
+
+
+```
+
+
+
+
+
+### Step 3 
+
+A polygon shapefile of U.S. state boundaries was obtained using the gadm() function and stored locally. The file was then reloaded directly using readRDS() to improve reliability, and then converted into an sf object and transformed into a WGS84 (EPSG: 4326) projection to match the coordinate reference systems of the climate projection data.
+
+
+```{r Q3}
+
+### 3)	Download the USA state polygons.
+
+#downloading USa polygons, making sure crs matches for what we will do next
+usa_map <- gadm(country = "United States of America", 
+                path = ".") %>% 
+  st_as_sf() %>% 
+  st_transform(crs = 4326)  # Make sure the CRS is set to WGS84 (EPSG:4326)
+
+usa_map <- readRDS("C:/R/gadm/gadm41_USA_1_pk.rds") %>% 
+  st_as_sf() %>% 
+  st_transform(crs = 4326)
+
+```
+
+
+### Step 4
+
+In order to prepare a spatial object representing Colorado, the U.S. state polygon shapefile was filtered to isolate the geometry of Colorado. 
+
+
+```{r Question4}
+
+## 4)	Load the USA polygons and filter to the polygon for the state of Colorado.
+
+#Filter for states (we are using the NAME_1 column for state names)
+usa_states <- usa_map %>%
+  dplyr::select("NAME_1", "geometry")
+
+#we only want CO:
+colorado_map <- usa_states %>%
+  filter(NAME_1 == "Colorado")
+
+
+
+```
+
+
+### Step 5 
+
+To spatially subset the mean annual temperature raster layers for each emsissions scenario in Colorado, the projections were cropped. The cropped rasters were then converted to full stars objects using st_as_stars() to ensure compatibility with later analyses. Dimensions and CRS were checked to ensure compatibility as well. 
+
+```{r Q5}
+
+
+## 5)	Crop the rasters for the two temperature projections to the polygon for the state of Colorado.
+
+
+#crop the SSP2 RCP4.5 projection for Colorado and ensure it's a stars object
+annual_T_SSP2_4.5_Colorado <- st_crop(annual_T_SSP2_4.5, colorado_map) %>% st_as_stars()
+
+#crop the SSP5 RCP8.5 projection for Colorado and ensure it's a stars object
+annual_T_SSP5_8.5_Colorado <- st_crop(annual_T_SSP5_8.5, colorado_map) %>% st_as_stars()
+
+
+
+
+#check if CRS of rasters and base map match
+#double checking CRS of the raster and Colorado map are the same
+crs_SSP2_4.5 <- st_crs(annual_T_SSP2_4.5_Colorado)
+crs_SSP5_8.5 <- st_crs(annual_T_SSP5_8.5_Colorado)
+
+#double checking CRS of the raster and Colorado map are the same
+colorado_map <- st_transform(colorado_map, crs_SSP2_4.5)
+
+
+
+#now we can crop to CO
+
+# #crop 4.5 projection for Colorado
+# annual_T_SSP2_4.5_Colorado <- st_crop(annual_T_SSP2_4.5, colorado_map)
+# 
+# #crop 8.5 projection for Colorado
+# annual_T_SSP5_8.5_Colorado <- st_crop(annual_T_SSP5_8.5, colorado_map)
+# 
+# 
+# #crop the SSP2 RCP4.5 projection for Colorado and ensure it's a stars object
+# annual_T_SSP2_4.5_Colorado <- st_crop(annual_T_SSP2_4.5, colorado_map) %>% st_as_stars()
+# 
+# #crop the SSP5 RCP8.5 projection for Colorado and ensure it's a stars object
+# annual_T_SSP5_8.5_Colorado <- st_crop(annual_T_SSP5_8.5, colorado_map) %>% st_as_stars()
+
+
+
+#check the dimensions of the cropped rasters
+st_dimensions(annual_T_SSP2_4.5_Colorado)
+st_dimensions(annual_T_SSP5_8.5_Colorado)
+
+# #ensure the CRS of the raster and Colorado map are the same
+# colorado_map <- st_transform(colorado_map, crs_SSP2_4.5)
+
+
+#plot just to see what it looks like, make sure we have read everything in right before we move on:
+
+# # Plot the cropped SSP2 RCP4.5 projection for Colorado
+# tm_shape(annual_T_SSP2_4.5_Colorado) +
+#   tm_raster(title = "Mean Annual Temperature (C) - SSP2 RCP4.5", palette = "-RdYlGn")
+# 
+# # Plot the cropped SSP5 RCP8.5 projection for Colorado
+# tm_shape(annual_T_SSP5_8.5_Colorado) +
+#   tm_raster(title = "Mean Annual Temperature (C) - SSP5 RCP8.5", palette = "-RdYlGn")
+#this is commented out because we do this in Q6 later
+
+```
+
+
+
+
+### Step 6 
+
+The cropped mean annual temperature rasters for both emissions scenarios (SSP2 RCP4.5 and SSP5 RCP8.5) were visualized using the tmap package.Multiple map outputs were generated to evaluate the spatial distribution of projected temperatures and highlight differences between scenarios. A gradient visualization was created in **Figure 1** with smooth color transitions-- in order to see differences between colors on the map more clearly for comparison across scenarios, custom breaks were created in **Figure 2**.
+
+The differences in projected temperatures (SSP5 minus SSP2) was calculated and plotted to isolate regions with the largest increases under a high emissions scenario, this is shown in **Figure 3**. 
+
+
+```{r Q6, include=FALSE, results='hide'}
+
+## 6)	Plot the rasters for the two temperature projections using a common color scale for temperature. Then plot the temperature difference between the two projections.  Show and describe your results.
+
+
+#plot the cropped SSP2 RCP4.5 projection for Colorado
+tmap1 <- tm_shape(annual_T_SSP2_4.5_Colorado) +
+  tm_raster(title = "Mean Annual Temperature (C) - SSP2 RCP4.5",
+            palette = "-RdYlGn") +
+  tm_borders() +
+  tm_layout(main.title = "SSP2 RCP4.5 - Mean Annual Temperature")
+
+#plot the cropped SSP5 RCP8.5 projection for Colorado
+tmap2 <- tm_shape(annual_T_SSP5_8.5_Colorado) +
+  tm_raster(title = "Mean Annual Temperature (C) - SSP5 RCP8.5",
+            palette = "-RdYlGn") +
+  tm_borders() +
+  tm_layout(main.title = "SSP5 RCP8.5 - Mean Annual Temperature")
+
+#combine the two plots side by side
+tmap_arrange(tmap1, tmap2)
+
+
+
+```
+
+
+
+```{r Q6gradient, warning=FALSE}
+
+
+#plot the cropped SSP2 RCP4.5 projection for Colorado
+tmap1 <- tm_shape(annual_T_SSP2_4.5_Colorado) +
+  tm_raster(title = "Mean Annual Temperature (C) - SSP2 RCP4.5",
+            palette = "-RdYlBu",
+            style = "cont",
+            n = 5) +  
+  tm_borders() +
+  tm_layout(main.title = "Fig 1. RCP4.5 - Mean Annual Temperature")
+
+#plot the cropped SSP5 RCP8.5 projection for Colorado
+tmap2 <- tm_shape(annual_T_SSP5_8.5_Colorado) +
+  tm_raster(title = "Mean Annual Temperature (C) - SSP5 RCP8.5",
+            palette = "-RdYlBu",
+            style = "cont",
+            n = 5) +  #add plus here!
+  tm_borders() +
+  tm_layout(main.title = "RCP8.5 - Mean Annual Temperature")
+
+# side by side
+tmap_arrange(tmap1, tmap2)
+
+
+```
+
+
+**Figure 1** shows projected mean annual temperature in Celsius across Colorado for the period 2061–2080 under SSP2 RCP4.5 (left) and SSP5 RCP8.5 (right), using a continuous gradient color scale, where blue colors represent cooler temperatures and red colors represent warmer temperatures.
+
+There is a distinct increase in mean annual temperature under the high-emissions scenario (SSP5 RCP 8.5) scenario relative to SSP2 RCP4.5, or the lower emissions scenario. The spatial pattern is similar across both projections, with higher elevations in western CO generally experiencing cooler temperatures than the eastern plains. 
+
+This map also highlights uniform warming across the state-- although it should be noted, the gradient makes it difficult to see stark differences between the maps. To see more differences, refer to **Figure 2** that standardizes the temperature bins in the legend to simpler comparison. 
+
+
+
+```{r Q6lessgradient, warning=FALSE}
+
+#custom breaks to standardize color bins
+custom_breaks <- c(0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20)
+
+#plot the cropped SSP2 RCP4.5 projection for Colorado
+tmap1 <- tm_shape(annual_T_SSP2_4.5_Colorado) +
+  tm_raster(title = "Temperature (C)",
+            palette = "-RdYlBu",
+            style = "fixed",
+            breaks = custom_breaks) +
+  tm_borders() +
+  tm_layout(main.title = "Fig 2. RCP4.5 - Mean Annual Temperature")
+
+#plot the cropped SSP5 RCP8.5 projection for Colorado
+tmap2 <- tm_shape(annual_T_SSP5_8.5_Colorado) +
+  tm_raster(title = "Temperature (C)",
+            palette = "-RdYlBu",
+            style = "fixed",
+            breaks = custom_breaks) +
+  tm_borders() +
+  tm_layout(main.title = "RCP8.5 - Mean Annual Temperature")
+
+
+tmap_arrange(tmap1, tmap2)
+
+
+# summary(annual_T_SSP2_4.5_Colorado[[1]])
+# summary(annual_T_SSP5_8.5_Colorado[[1]])
+
+
+
+```
+
+**Figure 2** displays projected mean annual temperatures in Colorado for the period 2061–2080 under two emissions scenarios: SSP2 RCP4.5 (lower emissions) and SSP5 RCP8.5 (higher emissions), using the BCC-CSM2-MR climate model.
+Both maps use a fixed color scale ranging from 0 C to 20 C, with cooler temperatures represented by blues and warmer temperatures in reds.
+
+Spatial patterns are consistent across scenarios, with cooler temperatures dominating high-elevation regions, while warmer temperatures occur in lower-elevation areas.
+
+However, the SSP5 RCP8.5 scenario exhibits a visible rightward shift in the color gradient, indicating overall higher temperatures across the state. In the SSP2 RCP4.5 map, much of the mountainous region remains in the 2–8 C range (blue to light blue), while in SSP5 RCP8.5, those same areas shift into higher bins (6–10 C, light blue to tan). The eastern plains, which appear in the 10–12 C range under SSP2, shift into the 12–14 C or warmer range under SSP5.
+
+In order to evaluate the mathematical differences shown in these maps, the difference in mean annual temperature was calculated and is represented in **Figure 3**. 
+
+
+```{r Q6diff}
+
+##now let's look at the differences
+
+#calculate the temperature difference between SSP5 RCP8.5 and SSP2 RCP4.5
+temp_diff <- annual_T_SSP5_8.5_Colorado - annual_T_SSP2_4.5_Colorado
+
+
+#plot the temperature difference
+tmap_diff <- tm_shape(temp_diff) +
+  tm_raster(title = "Temperature Difference (C)",
+            palette = "-BrBG") +
+  tm_borders() +
+  tm_layout(main.title = "Fig 3. Temperature Difference - RCP8.5 vs RCP4.5"
+)
+
+tmap_diff
+
+```
+
+**Figure 3**  shows the difference in the projected change in mean annual temperature between the high-emissions scenario and the moderate-emissions scenario for Colorado in the period 2061–2080.Values represent the absolute temperature increase in degrees Celsius between the two scenarios, calculated on a per-cell basis.
+
+The color scale ranges from 1.3 C to 2.0 C, with darker greens indicating larger temperature increases and tan tones representing relatively smaller increases. The map reveals that all areas of Colorado are projected to warm under SSP5 relative to SSP2, with no regions showing a decrease in temperature (dark brown).
+
+The greatest warming (1.8–2.0 C) is concentrated in the central and southern portions of the state, and even in the coolest bins, the projected difference exceeds 1.3 C, indicating that no part of the state is insulated from the effects of higher emissions.
+
+
+
+
+
+### Step 7
+
+Annual precipitation projections were extracted for both SSP2 RCP4.5 and SSP5 RCP8.5 scenarios from the same climate rasters used for temperature analysis. The 12th layer of the rasters (BIO12) corresponds to annual precipitation in millimeters was read in using read_stars(). 
+
+The class and dimensions of the loaded objects were inspected to ensure proper import of the data and to ensure it matched the previous data. The (CRS) of the two precipitation rasters were compared to ensure they were the same for later analysis.
+
+
+```{r Q7}
+
+## 7)	Load the raster for the average precipitation variable (“bio12”) (in mm) for both of the projections.
+
+#define path for 4.5 precip projection
+ssp2_precip_path <- "C:/R/projections/climate/wc2.1_2.5m/wc2.1_2.5m_bioc_BCC-CSM2-MR_ssp245_2061-2080.tif"
+
+#path for 8.5 precip projection
+ssp5_precip_path <- "C:/R/projections/climate/wc2.1_2.5m/wc2.1_2.5m_bioc_BCC-CSM2-MR_ssp585_2061-2080.tif"
+
+
+
+#load precip data
+
+#load data for SSP2 RCP4.5
+annual_precip_SSP2_4.5 <- read_stars(ssp2_precip_path)[,,,12]  #bio12 corresponds to annual precipitation
+
+#load data for SSP5 RCP8.5
+annual_precip_SSP5_8.5 <- read_stars(ssp5_precip_path)[,,,12]  #bio12 corresponds to annual precipitation
+
+
+#check data after loading in 
+#class and dimensions of the loaded precipitation data
+class(annual_precip_SSP2_4.5)
+class(annual_precip_SSP5_8.5)
+
+#view dimensions
+st_dimensions(annual_precip_SSP2_4.5)
+st_dimensions(annual_precip_SSP5_8.5)
+
+
+# #check the CRS of the precipitation rasters
+# crs_precip_SSP2_4.5 <- st_crs(annual_precip_SSP2_4.5)
+# crs_precip_SSP5_8.5 <- st_crs(annual_precip_SSP5_8.5)
+
+# # If they don't match, make them match if/else
+# if (!identical(crs_precip_SSP2_4.5, crs_precip_SSP5_8.5)) {
+#   annual_precip_SSP5_8.5 <- st_transform(annual_precip_SSP5_8.5, crs_precip_SSP2_4.5)
+# }
+
+
+```
+
+
+
+
+### Step 8 
+
+Annual precipitation raster layers for both emissions scenarios were spatially cropped to the Colorado boundary using the st_crop() function. This operation reduced the extent of the raster data to match the geometry of the Colorado shapefile. The dimensions of the resulting cropped rasters were then checked to confirm that the rasters were cropped properly. 
+
+
+```{r Q8}
+
+## 8)	Crop the rasters for the two precipitation projections to the polygon for the state of Colorado.
+
+#crop precip raster for 4.5 to CO
+annual_precip_SSP2_4.5_Colorado <- st_crop(annual_precip_SSP2_4.5, colorado_map)
+
+#crop precipitation raster for 8.5 to CO
+annual_precip_SSP5_8.5_Colorado <- st_crop(annual_precip_SSP5_8.5, colorado_map)
+
+#check the dimensions of the cropped precipitation rasters
+st_dimensions(annual_precip_SSP2_4.5_Colorado)
+st_dimensions(annual_precip_SSP5_8.5_Colorado)
+
+```
+
+
+
+
+### Step 9: 
+
+The annual precipitation projections for SSP2 RCP4.5 and SSP5 RCP8.5 in Colorado are visualized in **Figure 4**. Both raster layers were first converted to fully loaded stars objects and displayed side-by-side for comparison. The difference in precipitation between the two scenarios was calculated by subtracting the SSP2 raster from the SSP5 raster. 
+
+
+```{r Q9again, warning=FALSE}
+
+
+### 9)	Plot the rasters for the two precipitation projections using a common color scale for precipitation. Then plot the precipitation difference between the two projections.  Show and describe your results.
+
+
+#we already did this in 8 above 
+
+# #load the precipitation data for SSP2 RCP4.5 and select bio12 (annual precipitation)
+# annual_precip_SSP2_4.5 <- read_stars("C:/R/projections/climate/wc2.1_2.5m/wc2.1_2.5m_bioc_BCC-CSM2-MR_ssp245_2061-2080.tif")[,,,12]  # bio12 corresponds to annual precipitation
+# 
+# 
+# # Load the precipitation data for SSP5 RCP8.5 and select bio12 (annual precipitation)
+# annual_precip_SSP5_8.5 <- read_stars("C:/R/projections/climate/wc2.1_2.5m/wc2.1_2.5m_bioc_BCC-CSM2-MR_ssp585_2061-2080.tif")[,,,12]  # bio12 corresponds to annual precipitation
+# 
+# ###########thisone works
+# 
+# # Crop the SSP2 RCP4.5 precipitation raster to Colorado
+# annual_precip_SSP2_4.5_Colorado <- st_crop(annual_precip_SSP2_4.5, colorado_map)
+# 
+# # Crop the SSP5 RCP8.5 precipitation raster to Colorado
+# annual_precip_SSP5_8.5_Colorado <- st_crop(annual_precip_SSP5_8.5, colorado_map)
+# 
+
+
+
+#convert the 4.5 precipitation raster to a fully loaded stars object
+annual_precip_SSP2_4.5_Colorado <- st_as_stars(annual_precip_SSP2_4.5_Colorado)
+
+#convert the 8.5 precipitation raster to a fully loaded stars object
+annual_precip_SSP5_8.5_Colorado <- st_as_stars(annual_precip_SSP5_8.5_Colorado)
+
+
+
+
+
+###plot the precip maps: ###
+
+#plot the cropped SSP2 RCP4.5 precipitation raster for Colorado using tmap
+tmap_precip1 <- tm_shape(annual_precip_SSP2_4.5_Colorado) +
+  tm_raster(values = "-Blues",   
+            col.legend = tm_legend(title = "Annual Precipitation (mm)")) + 
+  tm_borders() +
+  tm_title(" Fig 4. RCP4.5 - Annual Precipitation")  # Title for the plot
+
+
+
+
+# Plot the cropped SSP5 RCP8.5 precipitation raster for Colorado using tmap
+tmap_precip2 <- tm_shape(annual_precip_SSP5_8.5_Colorado) +
+  tm_raster(values = "-Blues",   
+            col.legend = tm_legend(title = "Annual Precipitation (mm)")) + 
+  tm_borders() +
+  tm_title("RCP8.5 - Annual Precipitation")  
+
+
+
+tmap_arrange(tmap_precip1, tmap_precip2)
+
+
+
+```
+
+**Figure 4** shows the maps of projected annual precipitation in Colorado for the period 2061–2080 under two emissions scenarios: SSP2 RCP4.5 (moderate emissions, left panel) and SSP5 RCP8.5 (high emissions, right panel), both based on the BCC-CSM2-MR climate model. Darker shades of blue indicate greater annual precipitation in millimeters. 
+
+The overall spatial patterns are largely consistent between scenarios. In both cases, the highest precipitation totals occur in the central and southwestern mountains; the driest areas, receiving between 200 and 600 mm annually, are concentrated in the eastern plains and portions of the western valleys. The high-emissions scenario shows slightly darker blue areas in the southern front range compared to the lower (moderate) emissions scenario. 
+
+The comparison suggests that, unlike temperature, precipitation projections under the two scenarios are less divergent, with most areas maintaining similar precipitation patterns regardless of emissions pathway.
+
+In order to see the mathematical differences in precipitation between these scenarios, **Figure 5** maps the differences in mm. 
+
+```{r Q9diffplot, warning=FALSE}
+
+####now we can look at the difference 
+
+#calculate the precipitation difference between SSP5 RCP8.5 and SSP2 RCP4.5 for Colorado
+precip_diff <- annual_precip_SSP5_8.5_Colorado - annual_precip_SSP2_4.5_Colorado
+
+#plot the precipitation difference
+tm_diff <- tm_shape(precip_diff) +
+  tm_raster(values = "-BrBG",   
+            col.legend = tm_legend(title = "Precipitation Difference (mm)")) + 
+  tm_borders() +
+  tm_title("Fig 5. Precipitation Difference - RCP8.5 vs RCP4.5")  
+
+
+print(tm_diff)
+
+
+```
+
+
+
+**Figure 5** shows the projected difference in annual precipitation (mm) between the high-emissions scenario (SSP5 RCP8.5) and the moderate-emissions scenario (SSP2 RCP4.5), with green shades indicating an increase in precipitation under SSP5, and purple shades indicating a decrease.
+
+The map shows a mixed pattern of projected precipitation change, as much of the  central and northern parts of CO-— particularly mountainous regions-- are projected to receive 10 to 40 mm more precipitation annually under SSP5 relative to SSP2.parts of southeastern and northwestern Colorado are projected to receive slightly less precipitation (up to 20 mm less annually), represented by light purple shades. The spatial variability in the sign and magnitude of projected change suggests that precipitation response to emissions scenarios is different across CO. 
+
+Overall, the projected precipitation differences are relatively small compared to the temperature differences observed earlier,uncertainty and variability in future precipitation projections in different regions. 
+
+
+
+### Step 10 
+
+Projections were downloaded for a full ensemble of 25 CMIP6 climate models under both SSP2 RCP4.5 and SSP5 RCP8.5 scenarios for the 2061–2080 period, using a spatial resolution of 2.5 arc-minutes. A for loop was implemented to automate the download of 19 climatic variables for each model-scenario using the cmip6_world() function.
+
+Several files failed to download using the automated loop due to persistent timeouts. These were manually retrieved using download.file() and saved directly to a USB drive (to save room on the C drive) for use in downstream analysis.
+
+```{r Q10justthestuffthatdidntdownload}
+
+#some of the files were not downloading correctly in the loop (they kept timing out), so I took them out of the loop and manually downloaded them here: 
+
+###4.5 projection
+
+#define the URL for MPI-ESM1-2-LR model for SSP-2 RCP4.5
+url_mpi_245 <- "https://geodata.ucdavis.edu/cmip6/2.5m/MPI-ESM1-2-LR/ssp245/wc2.1_2.5m_bioc_MPI-ESM1-2-LR_ssp245_2061-2080.tif"
+
+#specify the path to save the file on the USB drive
+dest_mpi_245 <- "D:/MPI-ESM1-2-LR_ssp245_2061-2080.tif"
+
+#attempt to download the file to the USB drive
+download.file(url_mpi_245, dest_mpi_245, mode = "wb")
+
+
+
+####8.5 projection, same as before but just the different projection:
+
+#define the URL for MPI-ESM1-2-LR model for SSP-5 RCP8.5
+url_mpi_585 <- "https://geodata.ucdavis.edu/cmip6/2.5m/MPI-ESM1-2-LR/ssp585/wc2.1_2.5m_bioc_MPI-ESM1-2-LR_ssp585_2061-2080.tif"
+
+#specify the path to save the file on the USB drive
+dest_mpi_585 <- "D:/MPI-ESM1-2-LR_ssp585_2061-2080.tif"
+
+#attempt to download the file to the USB drive
+download.file(url_mpi_585, dest_mpi_585, mode = "wb")
+
+
+
+
+```
+
+
+```{r Q10butskippingoneswealreadydid}
+
+## 10)	Use a loop to download projections for all available climate models c("ACCESS-CM2", "ACCESS-ESM1-5", "AWI-CM-1-1-MR", "BCC-CSM2-MR", "CanESM5", "CanESM5-CanOE", "CMCC-ESM2", "CNRM-CM6-1", "CNRM-CM6-1-HR", "CNRM-ESM2-1", "EC-Earth3-Veg", "EC-Earth3-Veg-LR", "FIO-ESM-2-0", "GISS-E2-1-G", "GISS-E2-1-H", "HadGEM3-GC31-LL", "INM-CM4-8", "INM-CM5-0", "IPSL-CM6A-LR", "MIROC-ES2L", "MIROC6", "MPI-ESM1-2-HR", "MPI-ESM1-2-LR", "MRI-ESM2-0", "UKESM1-0-LL") at 2.5 arc-second resolution for the period 2061-2080 under SSP-2 RCP4.5 and SSP-5 RCP8.5.
+
+#list of climate models
+models <- c("ACCESS-CM2", "ACCESS-ESM1-5", "AWI-CM-1-1-MR", "BCC-CSM2-MR", "CanESM5", 
+            "CanESM5-CanOE", "CMCC-ESM2", "CNRM-CM6-1", "CNRM-CM6-1-HR", "CNRM-ESM2-1", 
+            "EC-Earth3-Veg", "EC-Earth3-Veg-LR", "FIO-ESM-2-0", "GISS-E2-1-G", "GISS-E2-1-H", 
+            "HadGEM3-GC31-LL", "INM-CM4-8", "INM-CM5-0", "IPSL-CM6A-LR", "MIROC-ES2L", "MIROC6", 
+            "MPI-ESM1-2-HR", "MPI-ESM1-2-LR", "MRI-ESM2-0", "UKESM1-0-LL")
+
+#define the scenarios (4.5 and 8.5)
+scenarios <- c("245", "585")  # SSP-2 RCP4.5 (245) and SSP-5 RCP8.5 (585)
+
+#time period and spatial resolution
+time_period <- "2061-2080"
+resolution <- 2.5  #arc-minutes
+
+# function to download projections with more retries and longer delay
+download_projection <- function(model, ssp, retries = 5, delay = 10) {
+  attempt <- 1
+  success <- FALSE
+  
+  #define the destination path for the file to check if it exists
+  dest_path <- paste0("projections/", model, "_ssp", ssp, "_2061-2080.tif")
+  
+  #check if the file already exists to skip the download
+  if (file.exists(dest_path)) {
+    print(paste("File already exists for", model, "SSP", ssp, "- skipping download."))
+    return()  #skips download if file exists
+  }
+
+  while (attempt <= retries && !success) {
+    try({
+      cmip6_world(model = model, 
+                  ssp = ssp,  
+                  time = time_period, 
+                  var = "bioc",   #grab the 19 most common climate variables
+                  res = resolution,      #spatial resolution in arc-seconds
+                  path = "projections")
+      success <- TRUE
+      print(paste("Successfully downloaded", model, "for SSP", ssp))
+    }, silent = TRUE)
+    
+    if (!success) {
+      print(paste("Download failed for", model, "SSP", ssp, "- retrying..."))
+      Sys.sleep(delay)  # we will wait for a longer delay before retrying (increased from 5 to 10 seconds)
+      attempt <- attempt + 1
+    }
+  }
+  if (!success) {
+    print(paste("Failed to download", model, "for SSP", ssp, "after", retries, "retries"))
+  }
+}
+
+#loop through models and scenarios to download projections with retry mechanism
+for (model in models) {
+  for (ssp in scenarios) {
+    # function to download projections with increased retries and delay
+    download_projection(model, ssp, retries = 5, delay = 10)  #5 retries, 10 seconds delay (a little longer)
+  }
+}
+
+
+```
+
+
+
+### Step 11
+
+In order to summarize projected temperature across models, a function was defined to load, crop, and spatially aggregate the average temperature variable (BIO1) for each climate model and emissions scenario. The function (download_and_aggregate()) performed the following steps within each loop iteration:
+
+1. Constructed the file path based on model name and scenario.
+
+2. Loaded the first band (BIO1) of the raster, or mean annual temperature.
+
+3. Cropped the raster to the Colorado boundary using st_crop().
+
+4. Created an aggregation grid with a defined cell size (cellsize = c(2.5, 2.5) arc-minutes).
+
+5. Applied the aggregate() function with the median function to calculate the median projected temperature within each grid cell. NA's were removed from the data in this step. 
+
+This function was then applied across all model-scenario combinations using for-loops and the median tempeature values were stored in a list for later analyses. 
+
+
+```{r updatedQ11onceagain}
+
+### 11)	Use a loop to load the rasters for the average temperature variable (“bio1”) for all available projections, then use ‘aggregate()’ to calculate the median temperature of each model within the state of colorado.  Suggestion: load and aggregate each object in the same loop iteration; this will save RAM.
+
+
+###this worked 
+
+#function to load, crop, and aggregate
+download_and_aggregate <- function(model, ssp, colorado_map, resolution = 2.5) {
+  
+  #filepath defined based on the model and scenario
+  if (model == "MPI-ESM1-2-LR") {
+    file_path <- paste0("D:/", model, "_ssp", ssp, "_2061-2080.tif")
+  } else {
+    file_path <- paste0("C:/R/projections/climate/wc2.1_2.5m/wc2.1_2.5m_bioc_", model, "_ssp", ssp, "_2061-2080.tif")
+  }
+  
+  #load the raster for bio1 (average temperature)
+  raster_data <- read_stars(file_path)[,,,1]  # bio1 is typically the first band
+  
+  #crop raster to the Colorado boundary
+  cropped_raster <- st_crop(raster_data, colorado_map)
+  
+  #create aggregation grid using the resolution
+  aggregation_grid <- st_make_grid(cropped_raster, cellsize = c(resolution, resolution))
+  
+  #now we use the aggregate function to Aggregate by median temperature
+  median_temp <- aggregate(cropped_raster, by = aggregation_grid, FUN = median, na.rm = TRUE)
+  
+  return(median_temp)
+}
+
+#loop through models and scenarios to load, crop, and aggregate
+median_temp_results <- list()  # List will store results 
+
+for (model in models) {
+  for (ssp in scenarios) {
+    #"download_and_aggregate" is function to load, crop, and aggregate that we defined previously
+    median_temp <- download_and_aggregate(model, ssp, colorado_map)
+    
+    #store the result for this model and scenario in the results list
+    median_temp_results[[paste(model, ssp, sep = "_")]] <- median_temp
+    
+    #print the current progress
+    print(paste("Aggregated median temperature for", model, "SSP", ssp))
+  }
+}
+
+#let look at first few rows 
+print(median_temp_results)
+
+
+
+```
+
+
+
+
+### Step 12 
+
+To visualize the variability in projected temperature across models, median temperature values for each model and scenario were extracted and compiled into a single data frame to make comparison simple. 
+
+A loop accesses each stars object, converted the raster values to numeric format, and appended the model name, scenario label, and extracted temperature values to a dataframe. This pared-down dataset of mean temperature values in each climate scenario was used to generate a boxplot, **Figure 6**. 
+
+```{r Q12part1}
+
+# 12)	Show a boxplot of median temperature in 2061-2080 comparing RCP4.5 to RCP8.5 across all models.
+#############
+
+#checking the content of median_temp_results to verify it contains the expected data
+#print(median_temp_results)
+#######
+
+#try to just extract the median data: 
+#prepare data for boxplot
+#create an empty data frame to store results for the boxplot later
+boxplot_data <- data.frame(Model = character(), 
+                           Scenario = character(),
+                           MedianTemperature = numeric(), 
+                           stringsAsFactors = FALSE)
+
+#loop through the results and add the data to the df
+for (model in models) {
+  for (ssp in scenarios) {
+    model_ssp <- paste(model, ssp, sep = "_")
+    
+    #double heck that the model and scenario combination exists in the results
+    if (model_ssp %in% names(median_temp_results)) {
+      #extract the median temperature value 
+      median_temp_value <- median_temp_results[[model_ssp]]
+      
+      #if/else: if it's a stars object, extract the median value from the stars object
+      if (inherits(median_temp_value, "stars")) {
+        # Extract the 'Median' attribute from the stars object
+        median_temp_value_numeric <- median_temp_value[[1]]  
+
+        # convert it into a numeric value
+        median_temp_value_numeric <- as.numeric(median_temp_value_numeric)
+        
+        #check if we have valid numeric values (e.g., not empty)
+        if (length(median_temp_value_numeric) > 0) {
+          #now we can add the model, scenario, and median temperature to the df
+          boxplot_data <- rbind(boxplot_data, 
+                                data.frame(Model = model, 
+                                           Scenario = ifelse(ssp == "245", "RCP4.5", "RCP8.5"),
+                                           MedianTemperature = median_temp_value_numeric, 
+                                           stringsAsFactors = FALSE))
+        }
+      }
+    }
+  }
+}
+
+#let's look at it
+head(boxplot_data)
+
+
+```
+
+
+
+
+```{r Q12aprt2}
+
+#now do the actual boxplot with the data we just prepped:
+
+
+#boxplot for comparing 4.5 and 8.5
+ggplot(boxplot_data, aes(x = Scenario, y = MedianTemperature, fill = Scenario)) +
+  geom_boxplot() +
+  labs(title = "Fig 6. Median Temperature in 2061-2080", 
+       x = "Emissions Scenario", 
+       y = "Median Temperature (C)") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) 
+
+
+```
+
+
+**Figure 5** is a boxplot comparing the projected median temperatures across multiple climate models for the two emissions scenarios. Each box represents the distribution of model-specific median temperature estimates for a given scenario (RCP4.5 and RCP8.5). 
+
+The results show an upward shift in projected temperature under the high-emissions scenario. The median value for RCP8.5 is higher than that for RCP4.5, indicating that models consistently project warmer conditions under SSP5. Additionally, the interquartile range (IQR) is slightly wider for RCP8.5, suggesting increased variability across models in the high-emissions case.
+
+
+### Step 13 
+
+To assess the effect of emissions scenario on projected temperature while accounting for differences between climate models, a linear regression model was used for analysis. 
+
+The outcome variable is median temperature in Celsius, and the predictors include scenarios (RCP4.5 or RCP8.5, a categorical variables), and model (this variable accounts for between-between differences in baseline temperature projections, controlling for the fact that some models systematically project higher and lower values than others). This models tests how a given emissions scenario, when adjusted for differences among models, affect projected median temperature. 
+
+The results of this regression analysis are displayed in **Table 1**.
+
+
+## Results
+
+
+```{r Q13}
+
+## 13)	Regress median temperature against emissions scenario controlling for climate model. Display and explain your results.
+
+
+#regression: MedianTemperature ~ Scenario + Model
+regression_model <- lm(MedianTemperature ~ Scenario + Model, data = boxplot_data)
+
+#summary of the regression model
+summary(regression_model)
+
+
+
+```
+
+
+
+
+
+
+```{r Q13tableonly}
+
+
+
+
+# clean up the regression results using tidy()
+model_results <- tidy(regression_model, conf.int = TRUE)
+
+#cename columns for clarity 
+model_results_clean <- model_results %>%
+  rename(
+    Term = term,
+    Estimate = estimate,
+    `Standard Error (SE)` = std.error,
+    `Test Statistic` = statistic,
+    `p-value` = p.value,
+    `Lower 95% CI` = conf.low,
+    `Upper 95% CI` = conf.high
+  )
+
+#mking a table using kable() and kable_styling for a nice format
+model_results_clean %>%
+  kable(format = "html", digits = 3, caption = "Table 1. Regression Results: Median Temperature by Emissions Scenario and Climate Model") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), full_width = FALSE)
+
+
+
+```
+
+
+
+**Table 1** summarizes the results of a linear regression model assessing the effect of emissions scenario and climate model on projected median temperature in Colorado for the period 2061–2080. 
+
+The estimated coefficient for ScenarioRCP8.5 was 1.495, indicating that, holding climate model constant, projected median temperatures under the high-emissions scenario are 1.50 C higher than in the moderate-emissions scenario. This effect was statistically significant (95% CI: 0.956 to 2.034, p < 0.001), suggesting a robust and meaningful difference in projected temperatures between scenarios.
+
+These results provide strong evidence that higher emissions in these climate scenarios are associated with warmer temperatures, regardless of the climate model used. 
+In contrast, none of the climate model terms were statistically significant (all p > 0.05). Although some models, such as CanESM5 (β = 1.41, 95% CI: -0.50 to 3.31) and CanESM5-CanOE (β = 1.27, 95% CI: -0.63 to 3.18), projected warmer conditions than the reference model in this analysis, the wide confidence intervals indicate a high degree of model-to-model variability that is not statistically significant.
+
+These statistical results support the map comparisons in **Figure 2** and **Figure 3** comparing mean annual temperature across CO shows a shift toward higher temperature values in SSP5 RCP8.5. **Figure 3** quantified this difference, showing that most of CO is projected to warm by approximately 1.5 to 2.0 C under the high-emissions scenario. 
+
+**Figure 6** also reinforces the statistical findings in **Table 1**, as the boxplot shows projected temperatures under RCP8.5 are higher across nearly all models. While the spread of values varies, the central tendency under the high-emissions scenario is higher temperatures overall. 
+
+All of these results support the hypothesis that high-emissions scenarios could drive future temperature outcomes even higher in Colorado, and could negatively impact ecology, agriculture, and human health. 
+
+
+
+
+## Discussion
+
+This analysis examined projected changes in temperature and precipitation across Colorado for the period 2061–2080 under two emissions scenarios—SSP2 RCP4.5 (moderate emissions) and SSP5 RCP8.5 (high emissions)—using CMIP6 climate model outputs. Results consistently showed substantial increases in mean annual temperature under the high-emissions scenario.
+
+The regression analysis revealed a statistically significant association between emissions scenario and projected median temperature (β = 1.495, p < 0.001, 95% CI: 0.956 to 2.034), controlling for climate model. This suggests that scenario selection influences projected future temperatures. While estimates varied somewhat across climate models, no individual model coefficients were statistically significant, indicating that the emissions scenario itself is a stronger predictor of temperature outcomes than various model differences.
+
+Spatial analyses support this statistical conclusion. **Figure 2** shows that temperature patterns under both scenarios are geographically similar, with cooler conditions in mountainous regions and warmer conditions in the eastern plains. However, the high-emissions scenario results in a general, upward shift in temperatures across Colorado (1.5 - 2.00 C increase). 
+
+The projected changes in precipitation, however, were less consistent. **Figure 4** shows that the spatial distribution of annual precipitation remains similar under both scenarios, with the highest values in mountainous areas. These small and regionally variable differences are consistent with broader uncertainties surrounding precipitation projections in climate modelling.
+
+The boxplot in **Figure 6** illustrates the contrast in temperature outcomes between scenarios, showing that across climate models, projected median temperatures are consistently higher under the SSP5 RCP8.5 scenario. The broader spread of temperatures observed under RCP8.5 may reflect increased variability across models in response to more extreme conditions.
+
+
+Overall, the results support the conclusion that future climate conditions in Colorado will be significantly warmer, potentially by 1.5–2.0 C, under a high-emissions scenario, highlighting the critical role of emissions trajectories in shaping the state’s future climate.
+
+These findings have important implications for climate adaptation and mitigation planning in Colorado. While there remains significant uncertainty regarding changes in precipitation, the projected warming under a high-emissions scenario is both statistically significant and geographically widespread. This shows the importance of implementing emissions mitigation strategies now to limit future temperature increases. Further research could enhance these projections by incorporating more region-specific climate drivers to improve spatial resolution and improve uncertainty. 
+
+
+
+## References 
+
+Nik, V. M., & Perera, A. T. D. (2020). The Importance of Developing Climate-Resilient Pathways for Energy Transition and Climate Change Adaptation. One Earth, 3(4), 423–424. https://doi.org/10.1016/j.oneear.2020.09.013
+
+Saunders, S., & Easley, T. (2018). Climate change in the headwaters: Water and snow impacts (2nd ed.). Rocky Mountain Climate Organization.  https://nwccog.org/wp-content/uploads/2018/02/Climate-Change-in-the-Headwaters.pdf
+
+U.S. Environmental Protection Agency [US EPA]. (2016). What climate change means for Colorado (EPA 430-F-16-008). https://19january2017snapshot.epa.gov/sites/production/files/2016-09/documents/climate-change-co.pdf
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

@@ -1,0 +1,1260 @@
+---
+title: "Lab Assignment 8"
+output: html_document
+---
+
+#  Predicting Snowfall in Colorado Ski Country
+#### Laura Beilsmith
+#### University of Colorado School of Public Health
+#### May 5th, 2025
+
+
+
+## Abstract 
+
+Accurate snow depth prediction in mountainous regions is essential for managing winter recreation, water supply, and climate adaptation planning. This study assessed the performance of machine learning approaches for predicting daily snow depth across Colorado ski regions using January 1 - 7th, 2025 data. Daily MODIS-derived predictors including normalized difference snow index (NDSI), albedo, and surface temperature were joined with elevation data and snow depth observations from SNOTEL monitoring stations. A random forest (RF) model was trained using cross-validation, with hyperparameters tuned via grid search. The final tuned random forest model achieved a test set RMSE of 293 cm and an R-squared of 0.08, indicating limited predictive accuracy for snow depth across the Colorado ski region. Prediction maps showed broad underestimation of observed snow depth values at high-elevation gauges, particularly in southwestern and central mountainous areas. Alternative spatial models, including kriging and a spatially varying coefficients model with NDSI as a predictor, yielded smoother spatial predictions but also could not capture local variability in snow depth. Future research should incorporate more precise spatial predictors, account for snow gauge elevation, and explore additional machine learning approaches to improve local-scale snow forecasting in mountainous areas.
+
+
+```{r setup, include=FALSE}
+
+#load packages 
+library(tidyverse)
+library(tidyr)
+library(dplyr)
+library(sf)
+library(tmap)
+library(tmaptools)
+library(ggplot2)
+library(lubridate)
+library(RAQSAPI)
+library(ggplot2)
+library(tibble)
+library(knitr)
+library(kableExtra)
+library(broom)
+library(OpenStreetMap)
+library(leaflet)
+library(spaMM)
+library(stars)
+library(tidycensus)
+library(stringr)
+library(doParallel)
+library(foreach)
+library(geodata)
+library(furrr)
+library(future)
+library(purrr)
+library(spaMM)
+
+```
+
+
+
+## Introduction
+
+Snowpack in mountainous regions is a critical water resource and driver of local economies, particularly in the Colorado where recreation and downstream water supply rely on predictable snowfall patterns, meaning accurate snow depth estimates are vital. However, snow accumulation and distribution are highly variable by geography and elevation (Dozier et al., 2004). Remote sensing data from satellite platforms like MODIS (Moderate Resolution Imaging Spectroradiometer), combined with machine learning models, provide new opportunities to predict snow depth across large spatial domains using physical and environmental predictors.
+
+This study evaluates the performance of different modeling approaches for predicting snow depth in Colorado ski country during January 2025. Specifically, the analysis compares predictions from a random forest (RF) machine learning model to those from models, including kriging and spatially varying coefficient (SVC) models. The research question guiding this analysis is: Can remote sensing data be used to accurately predict snow depth in mountainous terrain, and how do machine learning and spatial statistical models compare in their predictive accuracy?
+
+Daily MODIS-derived inputs including normalized difference snow index (NDSI), albedo, and surface temperature were joined with ground-based SNOTEL observations of snow depth. Predictive models were trained on these data and evaluated using cross-validation, test set performance, and visual comparison to observed gauge measurements. The goal of this analysis is to assess model accuracy and highlight the strengths and limitations of different approaches for operational snow prediction.
+
+
+## Methods
+
+### Study Design and Description of Data Sources
+
+This analysis aimed to predict snow depth across Colorado ski regions using daily satellite-derived environmental variables and snow gauge observations from January 2025. 
+
+Snow depth gauge data were obtained from the SNOTEL network, providing daily ground-based snow depth measurements at fixed monitoring stations. Remote sensing data was sourced from the Moderate Resolution Imaging Spectroradiometer (MODIS), including normalized difference snow index (NDSI), surface albedo, and day/night surface temperature at a 500-meter resolution. Elevation data were also incorporated as a predictor.
+
+A 500-meter spatial prediction grid covering the Colorado ski areas of interest was provided. All data layers were temporally and spatially joined to produce both a calibration dataset—used for model fitting—and a prediction dataset—used to visualize snow depth estimates. Missing MODIS values in the prediction dataset were imputed using column-wise medians to ensure complete covariate information for prediction. All analyses were conducted in R version 4.4.2.
+
+### Step 1 
+
+Processed spatial datasets were provided in the file "Snowdepth Prediction Data.v1.RData", which included daily snow depth gauge data, MODIS-derived snow and temperature surfaces, elevation, and a 500-meter spatial prediction grid for Colorado ski country. 
+
+```{r Q1, cache=TRUE}
+
+### 1)	To save your sanity, I have downloaded and processed: daily snow depth gauge data from the SNOTEL website; daily MODIS data for surface albedo, NDSI (normalized difference snow index), day and night surface temperature; and elevation, all covering the relevant area and date range. I have created a 500 meter resolution prediction grid. These data are contained in the ‘Snowdepth Prediction Data.v1.RData’ on Canvas. Please download this file. Note that the data from MODIS may contain missing values due to clouds.
+
+
+
+#loading in RData file 
+load("Snowdepth Prediction Data.v1.RData")
+
+#checking the loaded objects
+ls()
+
+
+```
+
+
+
+### Step 2 
+
+To construct calibration and prediction datasets, spatial joins were performed to associate SNOTEL sites and prediction grid cells with the appropriate MODIS snow and temperature grid cells. MODIS snow and temperature raster geometries were first cleaned, deduplicated, and transformed to match the coordinate reference system (CRS) of the monitoring data. The st_join() function was used to assign each SNOTEL site and prediction grid cell to its nearest MODIS snow and temperature pixels based on spatial location. These joins created key tibbles that preserved spatial alignment across all datasets.
+
+
+```{r Q2NEW, cache=TRUE}
+
+#2)	Perform a spatio-temporal join of these data to produce a calibration data set to fit the prediction models and a prediction data set to visualize the results. In this step, perform a spatial-only join to generate a ‘key’ tibble linking sites and gridcells. You should do this separately for the calibration and prediction data sets you will want to generate below.
+
+#first clean MODIS snow grid geometries
+snow_geo <- snow_ski %>%
+  as_tibble() %>%
+  select(geometry, Snow_X, Snow_Y) %>%
+  distinct() %>%
+  st_as_sf() %>%
+  st_transform(st_crs(monitor_ski))
+
+#clean MODIS temperature grid geometries
+temp_geo <- temp_ski %>%
+  as_tibble() %>%
+  select(geometry, Temperature_X, Temperature_Y) %>%
+  distinct() %>%
+  st_as_sf() %>%
+  st_transform(st_crs(monitor_ski))
+
+#select monitor sites with geometry
+monitor_geo <- monitor_ski %>%
+  select(geometry, X, Y, site_id) %>%
+  distinct()
+
+#then we can spatially join monitors to MODIS pixels (snow plus temp)
+mon_snow <- st_join(monitor_geo, snow_geo)
+all_geo <- st_join(mon_snow, temp_geo)
+
+#then transform prediction grid to MODIS CRS and join
+pred_new_crs <- pred_ski %>%
+  st_transform(st_crs(snow_geo))
+
+pred_snow_geo <- st_join(pred_new_crs, snow_geo)
+pred_key <- st_join(pred_snow_geo, temp_geo)
+
+```
+
+
+
+### Step 3
+
+To create the datasets required for model training and prediction, multi-way joins were conducted to align snow depth measurements, MODIS data, and spatial identifiers across both space and time. Geometry was first removed from the original SNOTEL, snow, and temperature datasets to facilitate attribute joins. The object "all_geo", generated in Step 2, was merged with SNOTEL monitor data, followed by MODIS snow and temperature records using "date" as the linking variable. This resulted in a full calibration dataset that included actual observed snow depth along with other predictors including elevation, x/y coordinates, MODIS-derived albedo, NDSI, and daytime/nighttime temperatures.
+
+A parallel join process was used to create the prediction dataset. The MODIS snow and temperature data were joined to the "pred_key" object, resulting in a spatially and temporally aligned dataset covering all prediction grid cells. Since continuous MODIS variables may contain missing values due to cloud cover, missing values for surface albedo, NDSI, and surface temperatures were imputed using the median value of each respective variable across the full dataset. This approach preserved the size and spatial coverage of the prediction grid while minimizing bias from extreme values.
+
+```{r Q3new}
+
+# 3)	Perform a spatio-temporal join of these data to produce a calibration data set to fit the prediction models and a prediction data set to visualize the results. In this step, perform a multi-way join using the key to merge by site/gridcell identifier and date. This Step should produce both a calibration and prediction data set. Both should include columns for elevation, x and y coordinates in the UTM Zone 13N projection, surface albedo, NDSI, daytime temperature, and night temperature.  The calibration data set should also include snow depth measured at monitor sites. Explain how you handle missing MODIS information and why you handled it that way.
+
+#first drop geometry from raw MODIS and monitor datasets
+monitor_no_geo <- monitor_ski %>% st_drop_geometry()
+snow_no_geo <- snow_ski %>% st_drop_geometry()
+temp_no_geo <- temp_ski %>% st_drop_geometry()
+
+#join monitor points with spatial snow/temp matches
+mon_geo <- inner_join(all_geo, monitor_no_geo)
+mon_snow_geo <- inner_join(mon_geo, snow_no_geo)
+
+#for Final calibration dataset: spatially and temporally join
+all_data <- inner_join(mon_snow_geo, temp_no_geo) %>%
+  mutate(Date = as.factor(Date))
+
+calibration_data <- all_data %>% #renaming and selecting all relevant vars
+  rename(
+    temp_day = Day_Surface_Temperature,
+    temp_night = Night_Surface_Temperature,
+    Prediction_X = Snow_X,
+    Prediction_Y = Snow_Y,
+    date = Date
+  ) %>%
+  select(date, site_id, X, Y, Elevation,
+         albedo = Snow_Albedo, ndsi = NDSI,
+         temp_day, temp_night, snow_depth)
+
+
+#create the prediction dataset by temporal join to all grid cells
+pred_snow <- inner_join(pred_key, snow_no_geo)
+pred_all <- inner_join(pred_snow, temp_no_geo)
+
+prediction_data <- pred_all %>%
+  mutate(date = as.factor(Date)) %>%
+  select(date, Snow_X, Snow_Y, Elevation,
+         Snow_Albedo, NDSI,
+         Day_Surface_Temperature, Night_Surface_Temperature) %>%
+  mutate(across(c(Snow_Albedo, NDSI, Day_Surface_Temperature, Night_Surface_Temperature),
+                ~ ifelse(is.na(.), median(., na.rm = TRUE), .)))  #imputing the median values 
+
+
+
+```
+
+
+
+### Step 4
+
+In order to ensure consistent and reproducible results across different runs of the analysis, a random seed was initialized using "set.seed()", the seed being 721. This allows for consistent resampling and data splitting outcomes in subsequent steps involving model training and evaluation.
+
+```{r Q4}
+
+### 4)	Use set.seed(XXX) to initialize R’s pseudo-random number generator so that your results are reproducible run-to-run. It’s up to you which number you plug in for XXX.
+
+set.seed(721)
+
+```
+
+
+### Step 5
+
+The tidymodels and rules packages were loaded to enable model specification and resampling procedures. The full calibration dataset was initially split using stratified sampling to allocate 70% of observations to a combined training/validation set and 30% to a holdout test set, stratified by snow depth. The test set was reserved for final model evaluation and not used during model tuning.
+
+The training/validation portion was further split to allocate 80% to training and 20% to validation. All splits were stratified by the snow depth outcome variable to preserve its distribution across partitions. Missing values in key predictor variables (albedo, NDSI, daytime and nighttime temperature, and snow depth) were dropped from both training and training/validation sets to prevent errors during model fitting and cross-validation.
+
+```{r Q5, warning=FALSE}
+
+### 5)	Load the tidymodels and rules packages.  Use the initial_validation_split(), training(), validation(), testing() functions to assign 70% of your data to the training/validation set and 30% to the test set. YOU SHOULD NOT USE THE TEST SET UNTIL YOU HAVE CHOSEN A FINAL MODEL. 
+
+library(tidymodels)
+library(rules)
+
+
+#Split 70% train/val, 30% test
+split_full <- initial_split(calibration_data, 
+                            prop = 0.7, 
+                            strata = snow_depth)
+
+trainval_data <- training(split_full)
+test_data     <- testing(split_full)  #don't do this yet until final model is chosen
+
+
+#now we can split trainval into 80% training, 20% validation
+split_trainval <- initial_split(trainval_data, prop = 0.8, strata = snow_depth)
+train_data <- training(split_trainval)
+val_data   <- testing(split_trainval)
+
+
+
+nrow(calibration_data)
+
+
+nrow(trainval_data)  # should be ~70% of calibration_data
+nrow(test_data)      # should be ~30%
+
+nrow(train_data)     # should be ~80% of trainval_data
+nrow(val_data)       # should be ~20% of trainval_data
+
+
+#remove any NA's otherwise this will cause problems 
+#clean up training data before generating folds in the next steps
+train_data <- train_data %>%
+  drop_na(albedo, ndsi, temp_day, temp_night, snow_depth)
+
+
+trainval_data <- trainval_data %>%
+  drop_na(albedo, ndsi, temp_day, temp_night, snow_depth)
+
+
+
+
+```
+
+
+
+### Step 6
+
+Repeated cross-validation was applied to the training data to evaluate model performance and facilitate hyperparameter tuning. The vfold_cv() function was used to generate a resampling object with 5 folds and 1 repeat, stratified by the snow depth outcome variable-- this reduced setting was chosen during initial development to improve computational efficiency. Stratification ensured that the distribution of snow depth was preserved across folds, reducing the risk of biased performance estimates.
+
+```{r Q6}
+
+### 6)	Create a cross-validation object using the vfold_cv() function with v=10 and repeats=5, to perform 5 repeats of 10-fold cross-validation on the training/validation data set. However, to save time while you are still testing your code, I suggest you use v=5 and repeats=1 instead until you are happy with your code. Note that for a smaller data set like this, bootstrap resampling is probably better than cross-validation, but cross-validation is more useful in real data science applications. With very large datasets with lots of computer power, usually the best technique to use is 10-fold cross-validation with 100 repeats.
+
+
+#set.seed(721) #seed for reference, we did this earlier
+
+cv_folds <- vfold_cv(train_data, 
+                     v = 5, 
+                     repeats = 1, 
+                     strata = snow_depth)  # stratify to preserve target distribution
+
+#look at structure of folds
+cv_folds
+
+
+```
+
+
+
+
+
+### Step 7 
+
+A modeling recipe was defined to preprocess predictors prior to model training. The outcome variable was snow depth, and predictors included categorical date, elevation, x and y spatial coordinates, NDSI, snow albedo, and day/night surface temperature. To prepare the data for machine learning, the following preprocessing steps were applied:
+
+step_zv(): Removed predictors with zero variance.
+
+step_dummy(): Converted the categorical date variable to a one-hot encoded format using all nominal predictors.
+
+step_normalize(): Standardized all numeric predictor variables to have mean zero and unit variance.
+
+This preprocessing ensured that predictors were on comparable scales and suitable for algorithms sensitive to variable distributions and encoding.
+
+```{r Q7}
+
+## 7)	Create a model ‘recipe’ with snow depth as the outcome and categorical date, elevation, x, y, NDSI, snow albedo, and day and night temperature as the predictors. Include step_xxx() functions to normalize all numeric predictor variables and define date as a ‘dummy’ variable.
+
+#creating a model recipe 
+#snow depth = outcome; date elevention, etc are predictors
+# modis_recipe <- recipe(snow_depth ~ date + Elevation + X + Y + ndsi + albedo + temp_day + temp_night, 
+#                        data = train_data) %>%
+#   step_zv(all_predictors()) %>%    ##ensures everything is a tibble 
+#   step_dummy(date, one_hot = TRUE) %>%         #create dummy vars for date
+#   step_normalize(all_numeric_predictors())     #normalize all numeric predictors
+# 
+# 
+# ##preview what it looks like
+# prep_modis <- prep(modis_recipe)
+# bake(prep_modis, new_data = NULL) %>% glimpse()
+# 
+# 
+# ####################################################################################
+# #try this instead to get Q16 to work to force everything to be a tibble
+# modis_recipe <- recipe(snow_depth ~ date + Elevation + X + Y + ndsi + albedo + temp_day + temp_night, 
+#                        data = train_data) %>%
+#   step_zv(all_predictors()) %>%
+#   step_dummy(all_nominal_predictors(), one_hot = TRUE, keep_original_cols = FALSE) %>%
+#   step_mutate(across(everything(), ~ .)) %>%  # ensures tibble return
+#   step_normalize(all_numeric_predictors())
+# 
+# ###############################################################################
+# #try changing it again
+# modis_recipe <- recipe(snow_depth ~ date + Elevation + X + Y + ndsi + albedo + temp_day + temp_night, 
+#                        data = train_data) %>%
+#   step_zv(all_predictors()) %>%
+#   step_dummy(all_nominal_predictors(), one_hot = TRUE, keep_original_cols = FALSE) %>%
+#   step_mutate(dummy_force = 1) %>%  # harmless dummy to force tibble output
+#   step_rm(dummy_force) %>%         # then remove the dummy
+#   step_normalize(all_numeric_predictors())
+# 
+
+##final cleaned recipe
+modis_recipe <- recipe(snow_depth ~ date + Elevation + X + Y + ndsi + albedo + temp_day + temp_night, 
+                       data = train_data) %>%
+  step_zv(all_predictors()) %>%
+  step_dummy(all_nominal_predictors(), one_hot = TRUE) %>%
+  step_normalize(all_numeric_predictors())
+
+
+
+
+```
+
+
+
+
+### Step 8
+
+A linear regression model was specified using the linear_reg() function with mode set to "regression" and the engine set to "lm". The previously defined preprocessing recipe was combined with the model in a unified workflow object. The model was evaluated using the 5-fold cross-validation object from Step 6. The fit_resamples() function was used to compute performance metrics across the folds, with root mean squared error (RMSE) and R-squared selected as evaluation metrics. These measures quantified model error and goodness-of-fit, and served as baseline metrics for comparison against more complex models in later steps.
+
+```{r Q8}
+
+### 8)	Run a standard linear model object using linear_reg() %>% set_mode(“regression”) %>% set_engine(“lm”). Then create a workflow object with you recipe object and linear model object. Finally, use fit_resamples() to perform cross-validation on the linear model. Finally, use collect_metrics() to determine the Root Mean Squared Area (rmse) and R2 (rsq) of the result, both of which are measures of accuracy. In general, low RMSE and high R2 are preferred, but you will only produce one of each in this step.
+
+#need to first define linear regression model
+lm_model <- linear_reg() %>%
+  set_mode("regression") %>%
+  set_engine("lm")
+
+#combine the model and recipe into a workflow
+lm_workflow <- workflow() %>%
+  add_model(lm_model) %>%
+  add_recipe(modis_recipe)
+
+#fit model with 5-fold CV (created earlier in Q6)
+lm_results <- fit_resamples(
+  lm_workflow,
+  resamples = cv_folds,
+  metrics = metric_set(rmse, rsq),   #only compute RMSE + R²
+  control = control_resamples(save_pred = TRUE)
+)
+
+#sum results
+collect_metrics(lm_results)
+
+
+
+```
+
+The mean Root Mean Squared Error (RMSE) across the five folds was 227.6 cm, and the mean coefficient of determination (R²) was 0.434. These results indicate that the linear model explained less than half of the variance in snow depth and yielded relatively high prediction error, suggesting that different modeling approaches may have better performance. 
+
+### Step 9 
+
+A random forest model was specified using rand_forest() with the number of trees fixed at 50. The model was configured for regression using the "ranger" engine. The same preprocessing recipe defined in Step 7 was reused in a new workflow object. Model performance was evaluated using 5-fold cross-validation (from Step 6), with RMSE and R squared computed across folds via the fit_resamples() function. These metrics were compared to the baseline linear model from Step 8 to assess potential improvements in predictive performance using a nonlinear ensemble method.
+
+```{r Q9}
+
+
+### 9)	Follow a similar procedure as in Step 8 but using rand_forest(trees = 50) %>% set_engine(“ranger”) %>% set_mode(“regression”) to perform random forest regression with a single fixed value of the hyperparameter ‘trees’. Determine the RMSE and R2 of the result. Are they better than the linear model?
+
+#now define the random forest model
+rf_model <- rand_forest(trees = 50) %>%
+  set_engine("ranger") %>%
+  set_mode("regression")
+
+#new workflow with the same recipe
+rf_workflow <- workflow() %>%
+  add_model(rf_model) %>%
+  add_recipe(modis_recipe)
+
+#fit using cross-validation
+rf_results <- fit_resamples(
+  rf_workflow,
+  resamples = cv_folds,
+  metrics = metric_set(rmse, rsq),
+  control = control_resamples(save_pred = TRUE)
+)
+
+#sum and look at results
+collect_metrics(rf_results)
+
+
+#yes, this is better than the linear model 
+# MSE dropped by ~126 mm
+
+#R sq jumped from 0.67 to ~0.99, meaning it explains 99% of the variance
+
+#This makes sense: forests can model nonlinear interactions and complex patterns that linear models miss
+
+```
+
+The mean RMSE decreased to 203.8 cm, and the mean R² increased to 0.563. These results suggest that the random forest was better able to capture nonlinear relationships and complex interactions in the data, explaining a greater proportion of snow depth variability with reduced prediction error.
+
+
+### Step 10
+
+To evaluate the effect of tree count on random forest model performance, the number of trees was treated as a tunable hyperparameter. A new model specification was created with trees = tune() and combined with the preprocessing recipe from Step 7. A regular grid of 10 values ranging from 10 to 200 was generated using grid_regular(). The resulting workflow was tuned via 5-fold cross-validation using the tune_grid() function.
+
+RMSE and R squared were calculated for each hyperparameter setting to assess model performance. Results were visualized with autoplot() to identify the optimal number of trees. The model with the lowest RMSE was selected for use in further tuning and model selection steps. Model performance was evaluated using RMSE and R-squared.
+
+```{r Q10}
+
+### 10)	Now try the random forest model but with many values of the trees hyper-parameter. Specifically, use grid_regular() to define a grid over hyper-parameter values from 10 to 200 with 10 values total.  [Note that while you are testing your code you may want to use a small number of values.]  Display the list of RMSE and R2 values for each hyper-parameter value, then use autoplot() to visualize them. Which values of trees has the lowest RMSE?  
+
+
+#first update the model with trees as a tunable parameter
+rf_tune_model <- rand_forest(trees = tune()) %>%
+  set_engine("ranger") %>%
+  set_mode("regression")
+
+#tuning workflow but with recipe we alreay made
+rf_tune_workflow <- workflow() %>%
+  add_model(rf_tune_model) %>%
+  add_recipe(modis_recipe)
+
+#define a grid for the trees hyperparameter from 10 values from 10 to 200
+tree_grid <- grid_regular(
+  trees(range = c(10, 200)),
+  levels = 10
+)
+
+#performing the tuning
+rf_tune_results <- tune_grid(
+  rf_tune_workflow,
+  resamples = cv_folds,
+  grid = tree_grid,
+  metrics = metric_set(rmse, rsq),
+  control = control_grid(save_pred = TRUE)
+)
+
+#display everything
+all_metrics <- collect_metrics(rf_tune_results)
+all_metrics
+
+#use autoplot to visualize
+autoplot(rf_tune_results) +
+  ggtitle("Fig. 1 Random Forest Model Performance")
+
+
+
+```
+
+As shown in the autoplot above, RMSE decreased as the number of trees increased from 10-50. The lowest RMSE was observed at 50 trees, after which performance plateaued. R-squared followed a similar trend, peaking around 50 trees with minimal increase beyond that point. These results suggest that increasing the number of trees improves predictive accuracy only up to a point. Beyond 50 trees results in diminishing returns. 
+
+
+### Step 11
+
+Six machine learning model specifications were defined to allow for algorithm comparison through hyperparameter tuning:
+
+Random Forest: Tuned over both the number of trees (trees) and number of predictors sampled at each split (mtry) using the "ranger" engine.
+
+Elastic Net Regression (GLMNET): Tuned over penalty strength (penalty) and the mixing parameter (mixture) using the "glmnet" engine.
+
+Neural Network: A multilayer perceptron (MLP) model from the "nnet" engine, tuned over number of hidden units, training epochs, and regularization penalty.
+
+Support Vector Machine (SVM): Tuned over the cost and radial basis kernel width (rbf_sigma) using the "kernlab" engine.
+
+Multivariate Adaptive Regression Splines (MARS): Tuned over interaction degree (prod_degree) and number of terms (num_terms) using the "earth" engine.
+
+Cubist: A rule-based model tuned over number of committees, number of nearest neighbors, and maximum rules using the "Cubist" engine.
+
+```{r Q11}
+
+### 11)	Create model objects for six models: random forest (with tuning parameters trees and mtry), glmnet model (with tuning parameters penalty and mixture), neural network model (with tuning parameters hidden_units, epochs, and penalty), support vector machines (with tuning parameters cost, rbf_sigma, and margin), mars (with tuning parameters prod_degree and num_terms), and cubist_rules (with tuning parameters committees, neighbors, and max_rules).
+
+
+#RF tune both trees and mtry
+randfor_model <- rand_forest(trees = tune(), mtry = tune()) %>%
+  set_engine("ranger") %>%
+  set_mode("regression")
+
+#GLMNET elastic net regularization (penalty and mixture)
+glmnet_model <- linear_reg(penalty = tune(), mixture = tune()) %>%
+  set_engine("glmnet") %>%
+  set_mode("regression")
+
+#Neural Network-- from nnet package
+nnet_model <- mlp(hidden_units = tune(), epochs = tune(), penalty = tune()) %>%
+  set_engine("nnet") %>%
+  set_mode("regression")
+
+#SVM with radial basis kernel 
+svm_model <- svm_rbf(cost = tune(), rbf_sigma = tune()) %>%
+  set_engine("kernlab") %>%
+  set_mode("regression")
+
+#MARS (Multivariate Adaptive Regression Splines)
+mars_model <- mars(prod_degree = tune(), num_terms = tune()) %>%
+  set_engine("earth") %>%
+  set_mode("regression")
+
+#Cubist Rules
+cubist_model <- cubist_rules(committees = tune(), neighbors = tune(), max_rules = tune()) %>%
+  set_engine("Cubist") %>%
+  set_mode("regression")
+
+
+
+```
+
+
+
+### Step 12
+
+All six model objects defined in Step 11 were combined with the shared preprocessing recipe (from Step 7) using the workflow_set() function. This structure allowed for systematic tuning and comparison of models using a consistent feature engineering pipeline. A named list of model objects was first created, and then paired with the recipe to construct a unified workflow set.
+
+To control the resampling behavior across models, a control_grid() object was defined with the following settings:
+
+save_pred = TRUE: saves all predictions during resampling
+
+save_workflow = TRUE: retains the fitted workflow for downstream use
+
+verbose = TRUE: provides progress output during execution
+
+parallel_over = "everything": enables parallelization across resamples and models when supported
+
+This setup ensures that all models are tuned using the same cross-validation strategy and preprocessing steps for fair performance comparison.
+
+```{r Q12}
+
+
+## 12)	Create workflow_set() of these models using the recipe you defined in Step 7. Define a control_grid() as shown in the lecture.
+
+
+#create a named list of your model objects
+model_list <- list(
+  random_forest = randfor_model,
+  glmnet        = glmnet_model,
+  nnet          = nnet_model,
+  svm_rbf       = svm_model,
+  mars          = mars_model,
+  cubist        = cubist_model
+)
+
+#now create the workflow set with the modis_recipe
+wf_set <- workflow_set(
+  preproc = list(modis_recipe),
+  models = model_list
+)
+
+#define control for resampling
+control <- control_grid(
+  save_pred = TRUE,
+  save_workflow = TRUE,
+  verbose = TRUE,
+  parallel_over = "everything"
+)
+
+#view the set
+wf_set
+
+
+```
+
+
+
+### Step 13 
+
+Each model in the workflow set was tuned using a grid search over four values per tuning parameter via the workflow_map() function. Cross-validation folds defined in Step 6 were reused to ensure consistent resampling. The grid = 4 setting was chosen to balance computational feasibility with sufficient exploration of the hyperparameter space.
+
+```{r Q13, results='hide', warning=FALSE, cache=TRUE}
+
+
+### 13)	Use workflow_map() with grid = 4 to run all the models, allowing each tuning parameter to take four possible values. Ignore the warning messages.
+
+
+#install.packages(c("glmnet", "kernlab", "earth", "Cubist"))
+library(glmnet)
+library(kernlab)
+library(earth)
+library(Cubist)
+
+
+#running all models, each take 4 possible values
+####this takes a long time, don't run unless necessary ############
+wf_results <- workflow_map(
+  wf_set,
+  seed = 721,
+  resamples = cv_folds,      #this was defined in Q6
+  grid = 4,                  #4 values for each tuning parameter
+  control = control          #this was defined in Q12
+)
+
+#save results so you don’t have to re-run
+saveRDS(wf_results, "model_tuning_results.rds")
+
+
+
+
+
+```
+
+
+
+### Step 14 
+
+Model performance was visualized using the autoplot() function from the tune package, applied to the tuned workflow set object. The plot displayed the best-performing parameter combination for each model based on the lowest root mean squared error (RMSE). The arguments select_best = TRUE, rank_metric = "rmse", and metric = "rmse" ensured that each model was evaluated and ranked according to its optimal RMSE score.
+
+This visualization facilitated rapid identification of the most accurate models. Based on RMSE, the random forest model outperformed others, followed closely by the Cubist model.
+
+```{r Q14}
+
+#14)	Use autoplot(…, select_best = TRUE, rank_metric = “rmse”, metric = “rmse”) to visualize the results. Which model has the lowest RMSE?
+
+#visualize RMSE across all models, highlighting best for each
+autoplot(wf_results, 
+         select_best = TRUE, 
+         rank_metric = "rmse", 
+         metric = "rmse") +
+  ggtitle("Fig. 2 Model Performance by RMSE")
+
+
+##random forest appears to be the best, then cubist 
+
+```
+
+*Figure 2* displays six models evaluated using repeated cross-validation. Among the six models, random forest had the lowest RMSE, indicating the highest predictive accuracy and stable performance. Therefore, random forest was selected for final tuning and prediction in later analyses.
+
+### Step 15
+
+The best-performing random forest model from the workflow set was identified using the extract_workflow_set_result() and select_best() functions, based on the lowest RMSE. Rather than extracting the prior workflow object, the final workflow was rebuilt explicitly using the best-performing hyperparameters (trees and mtry) and the recipe defined in Step 7.
+
+This finalized workflow was then applied to the held-out test dataset using last_fit() to estimate out-of-sample performance. Metrics computed included RMSE and R-squared, using collect_metrics(). The RMSE from this step represents the final reported predictive error of the tuned model, and results are presented in the table below.
+
+```{r Q15}
+
+### 15)	Follow the procedure in the lecture to finalize the workflow and get a final fit to your training/validation set and then apply it to the test set. This will involve the use of the extract_workflow_set_results(), select_best(), extract_workflow(), finalize_workflow() and last_fit() functions. What is the RMSE of your predictions in the test set? This is the number to report in your abstract.
+
+#pull out the best RMSE parameters from the workflow set for RF
+best_rf_params <- wf_results %>%
+  extract_workflow_set_result("recipe_random_forest") %>%
+  select_best(metric = "rmse")
+
+# #workflow with best parameters
+# final_rf_workflow <- wf_results %>%
+#   extract_workflow("recipe_random_forest") %>%
+#   finalize_workflow(best_rf_params)
+
+# rebuild the final workflow manually using updated recipe
+final_rf_workflow <- workflow() %>%
+  add_model(rand_forest(trees = best_rf_params$trees, 
+                        mtry = best_rf_params$mtry) %>%
+              set_engine("ranger") %>%
+              set_mode("regression")) %>%
+  add_recipe(modis_recipe)  # make sure this is your updated recipe from Step 7
+
+#final model evaluation on test set
+rf_final_fit <- last_fit(
+  final_rf_workflow,
+  split = split_full,  #training object
+  metrics = metric_set(rmse, rsq)
+)
+
+#look at the results
+rf_final_fit %>% collect_metrics()
+
+
+
+
+
+##abstract reporting: The final tuned random forest model achieved a test set RMSE of XX cm and an R squared of XX, indicating high (or low) predictive accuracy for snow depth in the Colorado ski region.
+
+```
+
+
+The table above displays the performance results of the final model being fit to the training validation data and evaluated on the test dataset. The model achieved an RMSE of 292.70 cm and R-squared of 0.08, indicating a relatively low predictive accuracy on new data despite random forest being the best model during cross-validation. This may suggest the need for further model refinement for accurate snow depth predicition. 
+
+### Step 16
+
+The final tuned random forest model was fit to the training and validation data. Snow depth predictions were then generated for each day and spatial grid cell in the prediction dataset using the augment() function. Predictions were made in chunks to reduce memory demands and converted to a stars object to facilitate faceted spatial plotting in later in this analysis. 
+
+```{r Q16, cache=TRUE}
+
+# #16)	Use augment() to add the final fit predictions to the prediction data set. Convert the predictions to into a stars object with dimensions x, y, and date.
+# 
+# #fit the final model workflow
+# final_rf_fitted_workflow <- final_rf_workflow %>% fit(data = trainval_data)
+# 
+# 
+# 
+# 
+# #rename the columns (make sure they are the right names)
+# prediction_data_renamed <- prediction_data %>%
+#   rename(
+#     X = Snow_X,
+#     Y = Snow_Y,
+#     albedo = Snow_Albedo,
+#     ndsi = NDSI,
+#     temp_day = Day_Surface_Temperature,
+#     temp_night = Night_Surface_Temperature
+#   ) %>%
+#   select(date, X, Y, Elevation, albedo, ndsi, temp_day, temp_night)  #ensure these are all present
+# 
+# ###double check colnames###########
+# colnames(prediction_data_renamed)
+# colSums(is.na(prediction_data_renamed))
+# #test it on a little augment
+# augment(final_rf_fitted_workflow, new_data = prediction_data_renamed[1:5, ])
+# 
+# ###############
+# 
+# 
+# #parallelization of this process 
+# library(furrr)
+# library(future)
+# 
+# plan(multisession, workers = 3) 
+# 
+# 
+# #takes a long time to run
+# #try split into chunks of 500 rows each to make it easier to run
+# prediction_chunks <- split(prediction_data_renamed, 
+#                            ceiling(seq_len(nrow(prediction_data_renamed)) / 500))
+# 
+# #still takes a long time to run (greater than 1 hour)
+# #run augment on each chunk
+# library(purrr)
+# 
+# # Run augment in parallel across chunks
+# predictions_augmented_list <- future_map(prediction_chunks, ~ {
+#   augment(final_rf_fitted_workflow, new_data = .x)
+# })
+# 
+# #combine results
+# predictions_augmented <- bind_rows(predictions_augmented_list)
+# 
+# #prepare for stars conversion
+# predictions_augmented <- predictions_augmented %>%
+#   select(X, Y, date, .pred) %>%
+#   rename(snow_depth_pred = .pred)
+# 
+# #convert to stars object
+# snow_pred_stars <- st_as_stars(predictions_augmented, dims = c("X", "Y", "date"))
+# 
+# 
+# #double check that CRS is what we want it to be 
+# st_crs(snow_pred_stars) <- st_crs(prediction_data)
+# 
+# 
+# #visual check
+# plot(snow_pred_stars)
+# 
+# will not finish running in a reasonable amount of time
+
+
+
+
+```
+
+
+
+#### Step 16 Subsetted Data
+
+The final tuned random forest model, developed in Step 15, was re-fit to the full training and validation dataset using the finalized workflow. To prepare the prediction dataset for mapping, variable names were aligned with those used in the model recipe and only the necessary predictor variables were retained. As the full dataset was large and computationally intensive, a subset of the prediction data was generated by randomly selecting 100 unique spatial points per date (700 total observations) to reduce computational burden while retaining temporal coverage and demonstrating model accuracy in later spatial analysis.
+
+The augment() function was then applied to this subset using the fitted workflow to generate snow depth predictions. These predictions were combined with their corresponding spatial and temporal coordinates, renamed for clarity, and checked to ensure uniqueness at each (X, Y, date) combination. The resulting data were converted to a stars object using st_as_stars() with spatial and temporal dimensions set to X, Y, and date. The coordinate reference system (CRS) was matched to that of the original prediction grid to support spatial visualization in the subsequent mapping step.
+
+```{r Q16streamlined}
+
+#### 16)	Use augment() to add the final fit predictions to the prediction data set. Convert the predictions to into a stars object with dimensions x, y, and date.
+
+#using augment() with a smaller subset for testing
+
+#rebuild and fit final workflow with updated recipe from Q7
+final_rf_workflow <- workflow() %>%
+  add_model(rand_forest(trees = best_rf_params$trees, 
+                        mtry = best_rf_params$mtry) %>%
+              set_engine("ranger") %>%
+              set_mode("regression")) %>%
+  add_recipe(modis_recipe)  #includes step_dummy(date) from Q7
+
+final_rf_fitted_workflow <- final_rf_workflow %>%
+  fit(data = trainval_data)
+
+#prep prediction dataset, make sure all necessary columns are in it and named properly
+prediction_data_renamed <- prediction_data %>%
+  rename(
+    X = Snow_X,
+    Y = Snow_Y,
+    albedo = Snow_Albedo,
+    ndsi = NDSI,
+    temp_day = Day_Surface_Temperature,
+    temp_night = Night_Surface_Temperature
+  ) %>%
+  select(date, X, Y, Elevation, albedo, ndsi, temp_day, temp_night)
+
+
+#extract workflow components
+# final_model <- extract_fit_parsnip(final_rf_fitted_workflow)
+# final_recipe <- extract_recipe(final_rf_fitted_workflow)
+
+# #inspect unique dates we have
+# unique_dates <- unique(prediction_data_renamed$date)
+# print(paste("Number of unique dates:", length(unique_dates)))
+
+# Sample 100 unique (X, Y) per date – safe for stars conversion
+set.seed(721)      # already did this earlier but do it again just in case
+test_subset <- prediction_data_renamed %>%
+  distinct(X, Y, date, .keep_all = TRUE) %>%
+  group_by(date) %>%
+  slice_sample(n = 100) %>%
+  ungroup()
+
+## the above will result in 700 rows, 100 per day
+
+#run augment() directly on the fitted workflow
+augmented_subset <- augment(final_rf_fitted_workflow, new_data = test_subset)
+
+#combine predictions with original coordinates and date into one dataset we can use for mapping later
+prediction_stars_data <- bind_cols(
+  test_subset %>% select(X, Y, date),
+  augmented_subset %>% select(.pred)
+) %>%
+  rename(snow_depth_pred = .pred)
+
+#confirm uniqueness (should be one value per X/Y/date)
+# prediction_stars_data %>% count(X, Y, date) %>% filter(n > 1)
+
+#convert it to stars object
+snow_pred_stars <- st_as_stars(prediction_stars_data, dims = c("X", "Y", "date"))
+
+#set the CRS from original prediction data
+st_crs(snow_pred_stars) <- st_crs(prediction_data)
+
+
+
+```
+
+
+
+### Step 17
+
+Predicted snow depth values from Step 16 were spatially cleaned by rounding coordinates to two decimal places and ensuring one unique prediction per (X, Y, date) combination. These data were then converted to a spatial features (sf) object using the coordinate reference system (CRS) of the original prediction grid and reprojected to WGS84 (EPSG:4326) for compatibility with OpenStreetMap basemaps.
+
+Observed snow depth data from SNOTEL monitoring sites were filtered to retain only dates present in the prediction dataset. These monitor data were also converted to an sf object and reprojected to WGS84. A faceted spatial map (*Figure 3*) was created using the tmap package. Predicted values were displayed using a blue gradient scale, while observed values were visualized as red points overlaid for visual comparison. The map was faceted by date to illustrate daily snow depth patterns across the study area.
+
+```{r Q17tidiedup}
+
+#17)	Plot the predictions for snow depth from Step 16 for each day (e.g., using tm_facets()). Include the corresponding snow depth gauge readings as colored dots using the same color scale as the stars object.  What do you notice?
+
+#round coordinates and ensure uniqueness
+prediction_stars_data_clean <- prediction_stars_data %>%
+  mutate(
+    X = round(X, 2),
+    Y = round(Y, 2)
+  ) %>%
+  group_by(X, Y, date) %>%
+  summarise(snow_depth_pred = mean(snow_depth_pred, na.rm = TRUE), .groups = "drop")
+
+#prep predicted data
+pred_sf <- prediction_stars_data_clean %>%
+  st_as_sf(coords = c("X", "Y"), crs = st_crs(prediction_data)) %>%
+  st_transform(crs = 4326)  #projection for plotting later on
+
+#prep monitor data 
+monitor_sf <- monitor_ski %>%
+  filter(Date %in% unique(pred_sf$date)) %>%
+  mutate(date = as.factor(Date)) %>%
+  st_transform(crs = 4326)
+
+
+
+```
+
+
+
+
+## Results
+
+To evaluate snow depth prediction across Colorado's ski regions, multiple statistical and machine learning models were trained and tested using MODIS remote sensing data, SNOTEL observations, and topographic predictors. The following results describe model accuracy, tuning performance, and spatial prediction fidelity, beginning with a comparison of predicted versus observed snow depth over time.
+
+
+```{r Q17basemap, fig.width = 20, fig.height = 20}
+
+library(tmap)
+tmap_mode("plot")
+
+# #project both layers to WGS84 
+# pred_sf <- prediction_stars_data_clean %>%
+#   st_as_sf(coords = c("X", "Y"), crs = st_crs(prediction_data)) %>%
+#   st_transform(crs = 4326)
+# 
+# monitor_sf <- monitor_ski %>%
+#   filter(Date %in% unique(pred_sf$date)) %>%
+#   mutate(date = as.factor(Date)) %>%
+#   st_transform(crs = 4326)
+
+#plot with OSM basemap
+tm_basemap("OpenStreetMap") +
+  tm_shape(pred_sf) +
+  tm_dots(
+    col = "snow_depth_pred",
+    palette = "Blues",
+    size = 0.5,
+    title = "Predicted Snow Depth (cm)",
+    style = "cont",
+    breaks = seq(0, 1200, 200)
+  ) +
+  tm_shape(monitor_sf) +
+  tm_dots(
+    col = "snow_depth",
+    palette = "Reds", ###these should be red to tell a difference between predicted vs observed 
+    size = 0.5,
+    shape = 21,
+    title = "Observed Snow Depth (cm)",
+    style = "cont",
+    breaks = seq(0, 2500, 500)
+  ) +
+  tm_facets(by = "date", ncol = 2) +
+  tm_layout(
+    main.title = "Fig 3. Predicted vs. Observed Snow Depth",
+    legend.outside = TRUE,
+    frame = FALSE
+  )
+
+
+
+```
+
+
+
+*Figure 3* shows daily predicted and observed snow depth across CO from January 1st - 7th, 2025. Predicted values (blue dots) are based on the final random forest model based on a subset of the data, while observed values (red dots) come from the SNOTEL monitoring sites. Both are plotted on the same scale from 0 to approximately 2500 cm.
+
+Predicted values generally align well with observed snow depth, especially in hihg-elevation areas of central and northern Colorado near major ski resort towns. However, there is underprediction in the southern and southwestern regions of the map, where observed values are often higher than predicted-- in some areas, observed snow depth appears to exceed 2000 cm, while predictions are much lower. This means the random forest model appears to capture the general spatial patterns but does not do well to predict more local extremes. The model appears to perform better on days with more homogenous snow depth (Jan 3rd, 4th, and 5th), while more underprediction is present on days with more extremes (Jan 1 or 7), suggesting the model is moderately successful at predicting general snow depth but missing more small-scale variability. 
+
+## Step 18 
+
+To evaluate spatial prediction performance using alternative modeling strategies, three geostatistical models were fit using the spaMM package, each estimating snow depth for January 2, 2025. These models were applied independently of the tidymodels workflow due to package incompatibility. For computational feasibility, a spatial subset of the calibration dataset (n = 30) was used to train the models, and a random subset of 100 grid cells was selected from the prediction dataset for model comparison.
+
+The following models were fit:
+
+Ordinary kriging with a covariate: a Gaussian process model with NDSI as a fixed effect and a Matern covariance structure:
+snow_depth ~ ndsi + Matern(1 | X + Y)
+
+Kriging with multiple covariates: the same Matern structure with elevation, NDSI, albedo, and surface temperature predictors:
+snow_depth ~ Elevation + ndsi + albedo + temp_day + temp_night + Matern(1 | X + Y)
+
+Spatially varying coefficient model (SVC): a spatial model with coefficients that vary across space for NDSI:
+snow_depth ~ 1 + Matern(0 + ndsi | X + Y)
+
+To ensure coordinate consistency, prediction locations were transformed to match the CRS of the training data before prediction. Predictions from all three models were added as new columns to the prediction dataset to support visual comparison in later in the analysis. Model results are also presented as maps in *Figures 4, 5, and 6*. 
+
+```{r Q18}
+
+# 18)	Let’s compare your daily prediction map from Step 17 for January 2nd 2025 to daily prediction maps for that same day generated by three geostatistical models (Unfortunately, tidymodels and spaMM don’t play nice together, so for this Step and the next let’s ignore resampling and the training/validation/test data split stuff). Fit and predict three models: (1) A kriging model with just NDSI. (2) A kriging model with all variables used in Step 7 except date. (3) A spatially-varying regression coefficients model with spatially varying NDSI, i.e., SnowDepth~1+Matern(0+NDSI|X+Y). These models take a while to run, so predict at a subset of points until you get the code working.
+
+
+###############################################################################
+#testing on a small subset first 
+###############################################################################
+
+
+#subset Jan 2 data and sample 30 rows just to test
+train_spatial <- calibration_data %>%
+filter(date == "2025-01-02") %>%
+drop_na(snow_depth, Elevation, ndsi, albedo, temp_day, temp_night, X, Y)  %>%
+slice_sample(n = 30) #30 is the test amount 
+
+# Make sure both are in sf objects
+train_sf <- st_as_sf(train_spatial, coords = c("X", "Y"), crs = st_crs(prediction_data))
+
+
+###1) kriging model with just NDSI
+model_krig_ndsi <- fitme(
+  snow_depth ~ ndsi + Matern(1 | X + Y),
+  data = train_spatial,
+  method = "REML"
+)
+
+###2) kriging model of all vars from Q7 except date
+model_krig_all <- fitme(
+  snow_depth ~ Elevation + ndsi + albedo + temp_day + temp_night + Matern(1 | X + Y),
+  data = train_spatial,
+  method = "REML"
+)
+
+#3) Spatially varying coefficients (SVC) on NDSI
+model_svc_ndsi <- fitme(
+  snow_depth ~ 1 + Matern(0 + ndsi | X + Y),
+  data = train_spatial,
+  method = "REML"
+)
+
+
+################################################################################
+#testing on n = 30 worked, let's do the same for a similar number of points per day as Q17 subset
+###############################################################################
+
+pred_grid <- prediction_data_renamed %>%
+  filter(date == "2025-01-02") %>%
+  drop_na(ndsi, Elevation, albedo, temp_day, temp_night, X, Y) %>%
+  slice_sample(n = 100) #change this to speed up testing if needed
+
+
+# Now reproject pred_grid to match
+pred_sf <- st_as_sf(pred_grid, coords = c("X", "Y"), crs = 4326) %>%  
+  st_transform(st_crs(train_sf)) %>%
+  st_coordinates() %>%
+  as_tibble() %>%
+  bind_cols(pred_grid %>% select(-X, -Y))
+
+pred1 <- predict(model_krig_ndsi, newdata = pred_sf)
+pred2 <- predict(model_krig_all, newdata = pred_sf)
+pred3 <- predict(model_svc_ndsi, newdata = pred_sf)
+
+
+
+#now add those new predictions to the pred_grid object
+pred_grid <- pred_grid %>%
+  mutate(
+    pred_krig_ndsi  = pred1,
+    pred_krig_all   = pred2,
+    pred_svc_ndsi   = pred3
+  )
+
+#colnames(pred_grid)
+
+#double check that pred_sf is in the correct CRS
+pred_sf <- st_as_sf(pred_grid, coords = c("X", "Y"), crs = st_crs(prediction_data)) %>%
+   st_transform(crs = 4326)
+# 
+# library(tmap)
+# tmap_mode("plot")
+# 
+# tm_shape(pred_sf) +
+#   tm_dots("pred_krig_ndsi", palette = "Blues", title = "Kriging: NDSI") +
+#   tm_facets()
+
+
+```
+
+
+
+```{r Q18map1}
+
+#Model 1: kriging with NDSI only 
+
+#SET UP:
+#attach predictions to coordinates
+pred_krig_ndsi_sf <- pred_grid %>%
+  mutate(pred_snow = pred1) %>%  #this is pred1 from spaMM from the step prior
+  st_as_sf(coords = c("X", "Y"), crs = st_crs(prediction_data)) %>%
+  st_transform(crs = 4326)
+
+#double check that the CRS matches
+monitor_sf <- monitor_sf %>% st_transform(crs = 4326)
+
+
+#plot to match Q17 map style
+tmap_mode("plot")
+tm_basemap("OpenStreetMap") +
+  tm_shape(pred_krig_ndsi_sf) +
+  tm_dots(
+    col = "pred_snow",
+    palette = "Blues",
+    size = 0.5,
+    title = "Predicted Snow Depth (cm)",
+    style = "cont",
+    breaks = seq(0, 1200, 200)
+  ) +
+  tm_shape(monitor_sf) +
+  tm_dots(
+    col = "snow_depth",
+    palette = "Reds", ##observed data is in red 
+    size = 0.5,
+    shape = 21,
+    title = "Observed Snow Depth (cm)",
+    style = "cont",
+    breaks = seq(0, 2500, 500)
+  ) +
+  tm_layout(
+    main.title = "Fig. 4 Kriging Model (NDSI) vs. Observed Snow Depth (Jan 2)",
+    main.title.size = 1.5,
+    legend.outside = TRUE,
+    frame = FALSE
+  )
+
+
+###this is where you left off, 5-1-2025 1:13am
+###this map works, use this to change Q17 and do the other models for Q18 
+#clean up code (stuff in Q7 that no longer necessary)
+#try to knit 
+
+
+```
+
+*Figure 4* shows snow depth predictions from a kriging model using only NDSI as a predictor, compared to observed snow depth values on Jan 2nd, 2025. Predicted snow depths (blue) are overlaid with observed values (red), both using the same scale from 0 to approximately 2500 cm.
+
+The kriging model underpredicts snow depth across CO, especially in southwestern regions/ Predicted values do not exceed ~800 cm, while actual observed depth often exceed 1500 cm. The model captures general spatial trends, like higher snow in mountainous regions and lower values in the eastern plains, but does not reflect more localized snow depth in the extremes. Compared to the random forest model, the kriging model approach appears to produce smoother spatial gradients and fewer accurate matches.
+
+###Q17 map 2 model 2
+```{r Q18map2}
+
+#Model 2: kriging model with all variables 
+
+#SET UP:
+#attach predictions to coordinates
+pred_krig_all_sf <- pred_grid %>%
+  mutate(pred_snow = pred2) %>%  # this is pred2 from spaMM
+  st_as_sf(coords = c("X", "Y"), crs = st_crs(prediction_data)) %>%
+  st_transform(crs = 4326)
+
+#plot to match Q17 map style
+tmap_mode("plot")
+tm_basemap("OpenStreetMap") +
+  tm_shape(pred_krig_all_sf) +
+  tm_dots(
+    col = "pred_snow",
+    palette = "Blues",
+    size = 0.5,
+    title = "Predicted Snow Depth (cm)",
+    style = "cont",
+    breaks = seq(0, 1200, 200)
+  ) +
+  tm_shape(monitor_sf) +
+  tm_dots(
+    col = "snow_depth",
+    palette = "Reds", ##reds are observed
+    size = 0.5,
+    shape = 21,
+    title = "Observed Snow Depth (cm)",
+    style = "cont",
+    breaks = seq(0, 2500, 500)
+  ) +
+  tm_layout(
+    main.title = "Fig. 5 Kriging Model (All) vs. Observed Snow Depth (Jan 2)",
+    main.title.size = 1.5,
+    legend.outside = TRUE,
+    frame = FALSE
+  )
+
+
+
+```
+
+*Figure 5* compares predicted snow depth using a kriging model with all predictors (elevation, NDSI, albedo, day time and night time temperatures) against observed values on Jan 2nd. Predictions are in blue, observed measures are in red.
+
+Compared to the NDSI-only kriging model, this version shows some improved spatial accuracy, particularly in eastern and north-central Colorado. However, it still tends to underpredict snow depth in the southwest and west-central areas, where measured snow accumulation was highest. The model captures moderate snow gradients more effectively but misses extreme values.
+
+
+
+#Q17 model 3 SVC NDSI
+```{r Q18map3}
+
+# Mdoel 3: spatially-varying regression coefficients (SVC) model with spatially varying NDSI
+
+#SET UP:
+#attach predictions to coordinates
+pred_svc_ndsi_sf <- pred_grid %>%
+  mutate(pred_snow = pred3) %>%  # this is pred3 from spaMM
+  st_as_sf(coords = c("X", "Y"), crs = st_crs(prediction_data)) %>%
+  st_transform(crs = 4326)
+
+
+#plot to match Q17 map style
+tmap_mode("plot")
+tm_basemap("OpenStreetMap") +
+  tm_shape(pred_svc_ndsi_sf) +
+  tm_dots(
+    col = "pred_snow",
+    palette = "Blues",
+    size = 0.5,
+    title = "Predicted Snow Depth (cm)",
+    style = "cont",
+    breaks = seq(0, 1200, 200)
+  ) +
+  tm_shape(monitor_sf) +
+  tm_dots(
+    col = "snow_depth",
+    palette = "Reds", ##red is observed
+    size = 0.5,
+    shape = 21,
+    title = "Observed Snow Depth (cm)",
+    style = "cont",
+    breaks = seq(0, 2500, 500)
+  ) +
+  tm_layout(
+    main.title = "Fig. 6 SVC NDSI vs. Observed Snow Depth (Jan 2)",
+    main.title.size = 1.5,
+    legend.outside = TRUE,
+    frame = FALSE
+  )
+
+```
+
+*Figure 6* shows snow depth predictions (blue) from a spatially varying coefficients model, overlaid with observed values on Jan 2nd (red). 
+ Compared to the previous kriging models, the SVC approach provides improved alignment with observed values in central and eastern regions of CO, but continues to underpredict snow depth in the southwest. The spatial adaptation to NDSI may enhance prediction where NDSI is a strong local signal, but performance is still limited locally in other areas.  
+
+```{r saveprogress}
+
+#save.image(file = "lab8_q1_to_q19cleaned.RData")
+
+#load("lab8_q1_to_q15_backup.RData")
+
+
+```
+
+
+
+
+### Step 19
+
+The prediction maps from the models in Step 18 appear to capture major spatial trends in snow depth across Colorado on January 2. However, compared to the machine learning (ML) prediction map from Step 17, they tend to underpredict high snow depths, particularly in the southwestern region. Among the three, the spatially varying coefficients (SVC) model provides the closest visual match to observed values in the central and eastern regions, but still misses high accumulation areas.
+
+In contrast, the ML random forest model in Step 17 captures both broad gradients and local variation more accurately across the entire domain. It aligns more closely with observed gauge values, especially in areas with high snow accumulation. Overall, while the models are interpretable and capture spatial structure, the ML model demonstrates superior predictive accuracy and finer spatial resolution, making it more reasonable for this application.
+
+## Discussion
+
+
+This analysis predicted daily snow depth across Colorado’s ski region using MODIS remote sensing data and gauge-based observations from SNOTEL monitors. A random forest model incorporating elevation, albedo, NDSI, and surface temperature achieved the best performance among machine learning models, with a test set RMSE of 293 cm and an R² of 0.08. While this indicates modest predictive accuracy, spatial maps showed that the model captured large-scale gradients in snow depth but often underestimated higher values, particularly in the mountainous west.
+
+Three models were also evaluated on a single day (January 2), including kriging models with NDSI only and with all predictors, and a spatially varying coefficient model. These produced smoother spatial predictions but tended to overestimate in eastern regions and miss high snow depths in western areas. While the SVC model slightly improved local patterns, all models underpredicted observed extremes. 
+
+Limitations include the presence of missing MODIS values, which required imputation of median values, and limited training data for high snow depth sites. Additionally, predictions were based on a subset of grid cells rather than full coverage due to computational load constraints. Future work could leverage terrain features, and improve cloud-masking methods in MODIS data to enhance model accuracy and improve missingness.
+
+As climate change alters snowfall and melt timing in Colorado mountains, reliable snow depth prediction tools will be vital for water resource planning, recreation, and risk management. This analysis highlights the utility—and current limits—of combining machine learning and geostatistics for snow modeling in complex terrain.
+
+
+
+## References
+
+Dozier, J., & Painter, T. H. (2004). MULTISPECTRAL AND HYPERSPECTRAL REMOTE SENSING OF ALPINE SNOW PROPERTIES. Annual Review of Earth and Planetary Sciences, 32(Volume 32, 2004), 465–494. https://doi.org/10.1146/annurev.earth.32.101802.120404
+
+
+

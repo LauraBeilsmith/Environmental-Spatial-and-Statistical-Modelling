@@ -1,0 +1,1093 @@
+---
+title: "Lab Assignment 5"
+output: html_document
+---
+
+
+#  HMS Polygons + in-situ PM2.5 monitors
+#### Laura Beilsmith
+#### University of Colorado School of Public Health
+#### March 24, 2025
+
+
+
+## Abstract 
+
+
+This study evaluates the relationship between Hazard Mapping System (HMS) smoke polygons and ground-level PM2.5 concentrations recorded at monitoring stations in Montana, Idaho, and Wyoming during 2020. Spatial and statistical analyses were conducted to determine whether the number of overlapping HMS smoke plumes at a monitoring location is a significant predictor of daily PM2.5 levels.  
+
+After spatially aligning HMS smoke data with PM2.5 monitor locations, analysis showed that smoke plumes were present on 72% of days in the dataset. Regression analysis revealed a significant positive association between the number of overlapping smoke plumes and daily PM2.5 concentration (estimate = 0.252, p < 0.001, 95% CI: 0.240 to 0.263), suggesting that increased smoke coverage correlates with higher fine particulate pollution. However, geographic variation in PM2.5 levels within smoke-affected regions indicates that smoke polygons alone do not fully capture surface-level pollution variability.  
+
+These findings suggest that while HMS smoke polygons are valuable for identifying general wildfire smoke-affected areas, their use in exposure assessment and air quality forecasting should be complemented with ground-based measurements and meteorological modeling to account for atmospheric dispersion and pollutant mixing processes.  
+
+
+
+## Introduction
+
+Air quality monitoring is essential for assessing human exposure to air pollution and guiding public health interventions, particularly during wildfire events, which can significantly elevate fine particulate matter (PM2.5) levels, especially as climate change increases frequency and severity of wildfires (Aguilera et al., 2021; Gerretsen et al., 2025). The Hazard Mapping System (HMS) smoke polygons, derived from satellite imagery, provide large-scale smoke coverage estimates and are widely used in wildfire air quality assessments. However, their ability to accurately represent ground-level PM2.5 concentrations remains a subject of investigation, as satellite-based smoke detections may not always correspond to surface-level pollution due to atmospheric and meteorological factors (Liu et al., 2023).  
+
+Regulatory air quality monitoring networks, such as the Environmental Protection Agency (EPA) monitors, offer PM2.5 measurements at ground level. However, the spatial coverage of these monitors is limited, particularly in more rural regions. The HMS smoke polygons, in contrast, provide widespread detection of smoke but lack direct ground-truth validation. Understanding the relationship between these two monitoring approaches is crucial for improving smoke exposure assessment and air quality forecasting.  
+
+This study aims to evaluate the association between HMS smoke plume polygons and ground-level PM2.5 concentrations recorded at monitoring stations across Montana, Idaho, and Wyoming during 2020. Specifically, the analysis examines whether the number of overlapping HMS smoke plumes at a monitoring location is a significant predictor of daily PM2.5 levels. Through spatial data processing, visualization, and statistical modeling, this study provides insights into the utility of satellite-derived smoke detections for characterizing surface air quality impacts from wildfire smoke.  
+
+
+```{r setup, include=FALSE}
+
+#load packages 
+library(tidyverse)
+library(tidyr)
+library(dplyr)
+library(sf)
+library(tmap)
+library(tmaptools)
+library(ggplot2)
+library(lubridate)
+library(RAQSAPI)
+library(ggplot2)
+library(tibble)
+library(knitr)
+library(kableExtra)
+library(broom)
+library(OpenStreetMap)
+library(leaflet)
+library(spaMM)
+library(stars)
+library(tidycensus)
+library(stringr)
+library(doParallel)
+library(foreach)
+
+```
+
+## Methods
+
+### Study Design and Description of Data Sources
+
+This study investigates whether ground-based particulate matter with a diameter of 2.5 micrometers or less (PM2.5) monitors in Montana, Wyoming, and Idaho recorded higher particulate concentrations when covered by satellite-observed smoke plumes during 2020. Data from NOAA's Hazard Mapping System (HMS), which provides satellite-derived smok-plume observations, and the U.S. Environmental Protection Agency's (EPA's) air quality monitoring network, which records daily PM2.5 concentrations in microns per cubic meter (ug/m3).    
+
+The analysis consists of spatial and statistical comparisons between these datasets. Spatial data processing is performed using the sf and tidyverse packages in R, while parallel computing techniques are employed using the foreach package to optimize computational efficiency. All analyses were conducted in R version 4.4.2.  
+
+
+### Step 1
+
+Before performing computationally intensive operations, the number of CPU cores was assessed to see all that were available for parallel processing, using the detectCores function. The total number of cores was 4.     
+
+```{r Question1}
+
+### 1)	Use detectCores() to determine how many cores your computer has.
+
+detectCores()
+
+
+
+
+```
+
+
+
+### Step 2
+
+To assess the relationship between satellite-detected smoke plumes and ground-level PM2.5 concentrations, daily smoke polygon shapefiles from NOAA's HMS were obtained for the entire year of 2020. These shapefile contain polygons that represent the spatial extent of wildfire smoke as observed by the satellite's called "GOES-East", "GOES-West" and others.   
+
+As downloading individual shapefiles for each day of 2020 would be time-consuming, an automated data retrieval and processing script using the foreach package was implemented to lopp over all dates in 2020.   
+
+The following steps are done in this script to download the shapefiles:   
+
+1) Construct the download URL for each daily shapefile.  
+
+2) Download the compressed .zip file containing the smoke polygons.  
+
+3) Extract and load the shapefile into R as an sf (spatial) object.  
+
+4) Create a "Date" column to each day's data.
+
+5) Combine all daily data into a single dataset called "smokepolys".    
+
+The final output is saved locally as an .RData file to load in in future sessions.   
+
+```{r Question2}
+
+
+###2)	Download the code snippet “SmokePolygonsSnippet.v2.R” from Canvas and copy it into your R session. Running this snippet will download the Hazard Mapping System plume shapefiles and pull them together into a single object called “smokepolys”.  Note that you will need to load certain libraries (sf, tidyverse, foreach) before running the snippet. Also note that the download.files() function may require a different option for the mode argument.
+
+#######Code Snippet Start
+
+# #define the base URL for downloading shapefiles
+# urlBase <- 'https://satepsanone.nesdis.noaa.gov/pub/FIRE/web/HMS/Smoke_Polygons/Shapefile'
+# 
+# # Updated paths 
+# destfile <- "C:/R/temp.zip"
+# 
+# dates <- seq.Date(from=as.Date("2020-01-01"), to=as.Date("2020-12-31"), by="day")
+# 
+# #Loop takes ~2.5 minutes, downloads about 10 MB of data
+# system.time({
+#   
+#   smokepolys <- foreach(date = dates, .packages = c("sf", "tidyverse"), .combine = "rbind") %do% { 
+#     
+#     yyyy <- str_sub(date, 1, 4)
+#     mm <- str_sub(date, 6, 7)
+#     dt <- str_replace_all(date, pattern = "-", replacement = "")
+#     
+#     fileURL <- str_c(urlBase, yyyy, mm, str_c("hms_smoke", dt, ".zip"), sep = "/")
+#     destfile <- "C:/R/temp.zip"
+#     
+#     try_error <- try(
+#       download.file(url = fileURL, destfile = destfile, method = "wininet") # Try "auto" if this fails
+#     )
+#     
+#     if (!(class(try_error) == "try-error") && file.exists(destfile)) {
+#       
+#       unzip(zipfile = destfile, 
+#             exdir = str_c("C:/R/Lab5shapefiles/hms_smoke", dt))
+#       file.remove(destfile)
+#       
+#       shape <- st_read(str_c("C:/R/Lab5shapefiles/hms_smoke", dt))
+#       
+#       if (identical(colnames(shape), c("Satellite", "Start", "End", "Density", "geometry"))) {
+#         
+#         return(shape %>% mutate(Date = date))
+#         
+#       } else {
+#         return(NULL)
+#       }
+#       
+#     } else {
+#       return(NULL)
+#     }
+#     
+#   }
+#   
+# }) # End system.time
+# 
+# save(x = smokepolys, file = "C:/R/US_HMSSmokePolygons_2020.RData")
+
+
+#######Code Snippet End
+
+
+#load("C:/R/US_HMSSmokePolygons_2020.RData")
+
+print(smokepolys)
+file.exists("C:/R/US_HMSSmokePolygons_2020.RData")
+
+
+```
+
+
+
+
+### Step 3
+
+To analyze the relationship between HMS smoke plumes and ground-level air quality, daily PM2.5 concentration data from regulatory air quality monitors in Montana, Idaho, and Wyoming were obtained using the RAQSAPI package. The EPA Air Quality System (AQS) database provides validated air pollution measurements, including daily summaries of PM2.5 concentrations at state-level monitoring sites.   
+
+Data from January 1 - December 31st were obtained from each state, the datatset was filtered to only include PM2.5 concentrations measured under the 24-hour 2024 standard to ensure consistency across states. The final dataset includes all states of interest during the time period of interest and fields such as monitor locations, observation dates, and pollutant concentrations.   
+
+
+```{r Question3}
+
+
+### 3)	Use RAQSAPI to load all daily PM2.5 data for monitors in Montana, Idaho, and Wyoming during 2020.
+
+##set up RAQSAPI credentials
+aqs_credentials(username = "laura.2.beilsmith@cuanschutz.edu", key = "amberwolf16")
+
+#define start and end dates as Date objects
+bdate_formatted <- as.Date("2020-01-01")  
+edate_formatted <- as.Date("2020-12-31")  
+
+#define state FIPS codes for Montana (30), Idaho (16), Wyoming (56)
+state_fips <- c("30", "16", "56")  # Montana, Idaho, Wyoming
+
+#download the PM2.5 data for each state
+pm25_data_list <- lapply(state_fips, function(state) {
+  aqs_dailysummary_by_state(
+    parameter = "88101",  # PM2.5 in µg/m³
+    bdate = bdate_formatted,  
+    edate = edate_formatted,  
+    stateFIPS = state
+  )
+})
+
+#combine all states into one dataset
+pm25_data <- do.call(rbind, pm25_data_list)
+
+
+# pm25_data_filter <- pm25_data %>% 
+#   filter(pollutant_standard == "PM25 24-hour 2024")
+
+
+#filter the pollutant column for PM2.5 24-hour 2024 measures
+pm25_data <- pm25_data %>%
+  filter(pollutant_standard == "PM25 24-hour 2024")
+
+
+#check first few rows
+head(pm25_data)
+
+
+
+```
+
+
+### Step 4
+
+To determine which satellite or instrument recorded the highest number of smoke plumes, the table() function was used on the Satellite column of the "smokepolys" dataset. The frequency of plumes detected by each staellite was tabulated, then the satellite that recorded the highest number of plumes was identified as "GOES-EAST" with 39,822 plumes detected.   
+
+```{r Question4}
+
+###4)	Use the table() function on the smokepolys$Satellite column to see how many plumes were detected by each of several satellites/instruments.  Which satellite/instrument detected the most plumes?
+
+#how many plumes detected by sattelites (column)
+max_satellite <- table(smokepolys$Satellite)
+max_satellite[which.max(max_satellite)]
+
+
+
+```
+
+### Step 5
+
+To ensure accurate spatial comparisons between smoke plume polygons and PM2.5 monitoring stations, the coordinate reference system (CRS) of the PM2.5 dataset was set to match that of the smokepolys dataset. The PM2.5 dataset was converted to a spatial object, assigned the CRS of EPSG 4326, and reprojecting the PM2.5 dataset to match the CRS of the smoke polygons data using st_transform.   
+
+```{r Question5}
+
+### 5)	Set the PM2.5 monitor data to the CRS used by the smoke polygons (for the purposes of this laboratory we assume they are the same, which may not be exactly correct).
+
+st_crs(smokepolys)
+
+colnames(pm25_data)
+
+
+library(sf)
+
+pm25_sf <- st_as_sf(pm25_data, coords = c("longitude", "latitude"), crs = 4326)  # Assuming WGS 84
+
+
+pm25_sf <- st_transform(pm25_sf, st_crs(smokepolys))
+
+st_crs(pm25_sf)
+
+```
+
+
+
+
+
+### Step 6
+
+To facilitate date-specific spatial analyses, the PM2.5 monitoring dataset was split (using the group_split function) into separate subsets for each day in 2020. This ensures that daily PM2.5 observations can be analyzed independently, allowing for spatial comparisons between smoke plume coverage and air quality levels on a per-day basis. The split was verified by comparing the number of rows in the new list with the number of unique days in the dataset, as there should only be one row per day after the split.   
+
+
+```{r Question6}
+
+### 6)	Use group_split to split the PM2.5 monitor sf object into a list by date.
+
+
+str(pm25_sf)
+
+
+pm25_sf$Date <- as.Date(pm25_sf$date_local)  # Adjust column name if needed
+
+pm25_list <- pm25_sf %>% group_split(Date)
+
+length(pm25_list)
+length(unique(pm25_sf$Date))
+#both are 366
+
+
+```
+
+
+
+
+
+
+### Step 7
+
+To enable day-by-day spatial comparisons between smoke plume coverage and PM2.5 concentrations, the HMS smoke plume dataset was split into separate subsets for each day in 2020. This ensures that each dataset can be analyzed based on the same days in 2020. The group_split function was used to separate the dataset into a list of daily smoke plume datasets, and to confirm date alignment the number of days (rows) in the smoke dataset was compared to the PM2.5 dataset from Step 6, and both were 366 (365 plus a leap year day in 2020).  
+
+```{r Question7}
+
+
+### 7)	Use group_split to split the smoke plume sf object into a list by date. Compare the number of elements of this list to the number in the list from Step 6.
+
+smoke_list <- smokepolys %>% group_split(Date)
+
+smokepolys$Date <- as.Date(smokepolys$Date)
+
+
+length(unique(smokepolys$Date))
+length(smoke_list)
+#both 366
+
+
+
+length(pm25_list) == length(smoke_list)
+
+
+```
+
+
+
+
+### Step 8
+
+To examine the spatial relationship between HMS smoke plumes and PM2.5 concentrations, an interactive Leaflet map was created for day 238 of 2020 (August 25, 2020). This visualization (**Figure 1**) provides insight into the extent of wildfire smoke dispersion and its potential impact on ground-level air quality. The HMS smoke polygons were overlayed with the PM2.5 monitor locations onto a basemap.   
+
+```{r Question8}
+
+
+###8)	Use leaflet to map the smoke plume polygons and PM2.5 monitor concentrations (the latter colored by concentration) on day 238 of the year 2020.
+
+day_238 <- as.Date("2020-01-01") + 237  #Add 237 because Jan 1 = Day 1
+
+#filter the day we want 
+smoke_day238 <- smokepolys %>% filter(Date == day_238)
+pm25_day238 <- pm25_sf %>% filter(Date == day_238)
+
+#choose color palette
+pm_palette <- colorNumeric(palette = "YlOrRd", domain = pm25_day238$arithmetic_mean)
+
+
+
+leaflet() %>%
+  
+  setView(lng = -110, lat = 45, zoom = 4) %>% #this sets where we want the view to be when we knit 
+  
+  #add a title using HTML
+  addControl("<h3>Fig. 1 Smoke Plume Coverage and PM2.5 Concentrations (Aug 25, 2020)</h3>", 
+             position = "topleft") %>%
+  
+  #basemap
+  addProviderTiles(providers$CartoDB.Positron) %>%
+  
+  #add smoke plume polygons
+  addPolygons(data = smoke_day238, 
+              color = "gray", 
+              fillOpacity = 0.5, 
+              weight = 1, 
+              popup = ~paste("Smoke Density:", Density)) %>%
+
+  #add PM2.5 monitor locations, colored by concentration
+  addCircleMarkers(data = pm25_day238, 
+                   radius = 5, 
+                   color = ~pm_palette(arithmetic_mean), 
+                   fillOpacity = 0.9, 
+                   popup = ~paste("PM2.5:", arithmetic_mean, "µg/m³")) %>%
+
+  #add the legend
+  addLegend("bottomright", 
+            pal = pm_palette, 
+            values = pm25_day238$arithmetic_mean, 
+            title = "PM2.5 Concentration (µg/m³)")
+
+```
+
+
+**Figure 1** is a visualization of smoke plume coverage and PM2.5 concentrations on August 25th, 2020. The smoke polygons (gray) represent the spatial extent of wildfire smoke on this day, which PM2.5 monitoring stations (graident colored circles) indicate pollution levels, with redder colors indicating higher ug/m3 (microns per cubic meter) and yellower colors indicating lower ug/m3 concentrations.  
+
+The center of the region of interest appears to have higher concentrations of PM2.5, and the southern part of the region appears to have lower concentrations, which could be due to denser smoke coverage due to overlaping plumes in the center of the region.   
+  
+
+
+
+
+### Step 9
+
+To explore the speed of computational tasks, a parallel processing cluster was created and registered for use with the foreach() package. Parallel computing should allow for multiple tasks to be done simultaneously, reducing processing time for tasks like spatial overlays, and looping through large datasets. As the number of cores available is 4, 3 will be used.   
+
+```{r Question9}
+
+
+### 9)	Create and register a cluster of processors/cores for use with foreach(). Remember to leave at least one processor/core free to run the operating system!
+
+detectCores()
+#this was 4 for before so we can use 3
+
+num_cores <- detectCores() - 1  #Leaves one core free
+cl <- makeCluster(num_cores)  
+registerDoParallel(cl)
+
+#did it work?
+getDoParWorkers()  # Should return the number of registered cores
+
+
+```
+
+
+### Step 10
+
+To quantify the relationship between wildfire smoke plumes and ground-level PM2.5 concentrations, an iterative spatial analysis was performed for each day in 2020. This process identified how many HMS smoke plumes overlapped with each air quality monitoring station using sequential processing (%do% in foreach()).  
+
+The stepwise process included the following, while tracking processing time:   
+
+1) Looping through each date in 2020 to analyze daily smoke-PM2.5 relationships.
+
+2) Filtering both the smoke (smokepolys) and PM2.5 (pm25_sf) datasets for each date.
+
+3) Ensuring all smoke polygons were valid using st_make_valid() to correct geometric errors.
+
+4) Counting the number of plumes overlapping each PM2.5 monitor using st_intersects().
+
+5) Creating a binary indicator (plume_present) to indicate whether a monitor was covered by at least one smoke plume.  
+
+The total sequential processing time was 221.47 seconds to loop through 366 days, providing a day-by-day measure of wildfire smoke exposure.   
+
+
+```{r Question10, warning=FALSE}
+
+### 10)	Use foreach() with %do% to loop over all days in 2020; on each date compute the number of plumes overlapping each monitor location, and whether the number of overlapping plumes is greater than 0. Return these two results as columns in a tibble that also includes the monitor information for that day.  Note that some of the smoke polygons have errors in them so you may need to use st_make_valid(). Use system.time() to monitor how long this loop takes to run. Ignore warnings that say “bounding box has potentially an invalid value range for longlat data”.
+
+
+system.time({  # Track execution time
+
+  # Loop through each date in 2020
+  overlap_results <- foreach(date = unique(pm25_sf$Date), .combine = "rbind") %do% {
+    
+    # Filter data for the current date
+    pm25_day <- pm25_sf %>% filter(Date == date)
+    smoke_day <- smokepolys %>% filter(Date == date)
+
+    # Ensure valid smoke polygons (fix any errors)
+    smoke_day <- st_make_valid(smoke_day)
+
+    # Count how many plumes overlap each monitor
+    pm25_day <- pm25_day %>%
+      mutate(
+        num_plumes = sapply(geometry, function(pt) {
+          sum(st_intersects(pt, smoke_day, sparse = FALSE))
+        }),
+        plume_present = as.integer(num_plumes > 0)  # 1 if plumes > 0, else 0
+      )
+
+    return(pm25_day)  # Return modified PM2.5 data for this day
+  }
+})  # End system.time
+
+head(overlap_results)  # Preview first few rows
+
+#is this a tibble?
+
+# user   system  elapsed 
+# 213.52    3.07  221.47 
+
+
+```
+
+
+
+### Step 11
+
+To improve computational efficiency, the plume overlap analysis from Step 10 was repeated using parallel processing (%dopar%) instead of sequential processing (%do%). This approach distributes computations across multiple processor cores, significantly reducing execution time.  
+
+The following steps were done while tracking time to complete the tasks:  
+
+1) Registering the parallel cluster using makeCluster() and registerDoParallel().
+
+2) Looping over each day in 2020.
+
+3) Filter the smoke (smokepolys) and PM2.5 (pm25_sf) datasets for that day.
+
+4) Ensure valid smoke polygons by using st_make_valid().
+
+5) Count the number of overlapping plumes for each PM2.5 monitor using st_intersects().
+
+6) Create a binary indicator (plume_present) to denote whether at least one smoke plume was present.  
+
+This parallel loop ran for a total of 117.43 seconds, an improvement in speed from the sequential loop in Step 10.   
+
+
+```{r Question11, warning=FALSE}
+
+### 11)	Use foreach() with %dopar% to loop over all days in 2020; on each date compute the number of plumes overlapping each monitor location, and whether the number of overlapping plumes is greater than 0. Return these two results as columns in a tibble that also includes the monitor information for that day.  Note that some of the smoke polygons have errors in them so you may need to use st_make_valid(). Use system.time() to monitor how long this loop takes to run. Ignore warnings that say “bounding box has potentially an invalid value range for longlat data”.
+
+
+#detect available cores and leave one free
+num_cores <- detectCores() - 1  
+cl <- makeCluster(num_cores)  
+registerDoParallel(cl)
+
+#check registered cores
+getDoParWorkers()  #should return num_cores
+
+
+#running paralleled loop
+system.time({  # Track execution time
+
+  overlap_results_parallel <- foreach(date = unique(pm25_sf$Date), 
+                                      .combine = "rbind", 
+                                      .packages = c("sf", "dplyr")) %dopar% {
+    
+    #filter data for the current date
+    pm25_day <- pm25_sf %>% filter(Date == date)
+    smoke_day <- smokepolys %>% filter(Date == date)
+
+    # Ensure valid smoke polygons (fix any errors)
+    smoke_day <- st_make_valid(smoke_day)
+
+    #count how many plumes overlap each monitor
+    pm25_day <- pm25_day %>%
+      mutate(
+        num_plumes = sapply(geometry, function(pt) {
+          sum(st_intersects(pt, smoke_day, sparse = FALSE))
+        }),
+        plume_present = as.integer(num_plumes > 0)  # 1 if plumes > 0, else 0
+      )
+
+    return(pm25_day) #this will return modified PM2.5 data for this day
+  }
+})  # End system.time
+
+
+
+head(overlap_results_parallel)  #look at first few rows 
+
+
+#   user  system elapsed 
+#   2.80    0.65  117.43 
+
+```
+
+
+
+
+
+### Step 12
+
+To confirm that parallel processing (%dopar%) produced the same results as sequential processing (%do%), the identical() function was used to compare the two dataset, ensuring that parallelization did not introduce errors in the plume overlap calculations.   
+
+```{r Question12}
+
+### 12)	Use the identical() function to prove that the results of the previous two steps are identical.
+
+identical(overlap_results, overlap_results_parallel)
+
+
+
+```
+
+
+
+### Step 13
+
+To calculate the efficiency of parallel processing versus sequential processing, the speedup factor was calculated by dividing the sequential executaion time over the parallel execution time.   
+
+The speedup factor (or how much the parallel loop sped up the functions and calculations done in the loop compared to the sequential loop) was 1.88 seconds, meaning the parallel loop was 1.88 times faster than the sequential loop. The parallelized version of the loop reduced execution time by approximately 47% ((1 - 1/1.88) * 100). This is likely due to the use of multiple processor cores, distributing the workload more efficiently to run multiple iterations at the same time in parallel.   
+
+```{r Question13}
+
+### 13)	State whether the parallel loop was faster than the sequential loop and by what factor.
+
+#the time for Q10 (sequential loop) was 221.47 sec
+#the time for Q11 (parallel loop) was 117.43 sec 
+
+#sequential / parallel 
+speedup_factor <- 221.47 / 117.43
+speedup_factor
+
+#answer: 1.88
+#this means the parallel loop was about 1.88 times faster than the sequential loop (88%) 
+
+#this means the parallel loop (%dopar%) speeds up the computation by distributing 
+#tasks across multiple processor cores, rather than 
+#executing everything one at a time like the sequential loop
+#so each date in 2020 is processed at the same time using diff CPU cores 
+
+```
+
+
+
+
+### Step 14
+
+To assess how computational complexity affects execution time, the sequential loop (%do%) was repeated with an additional time-consuming matrix inversion operation at each iteration, where n = 400. This would serve to increase the computational workload.   
+
+Then, the matrix inversion operation was increased to n = 800 to articifically increase the computational workload to simulate intense workloads for spatial data or large datasets.   
+
+The speed up factors were calculated for both the n = 400 (sequential and parallel) scenario and n = 800 (sequential and parallel) scenario.  
+
+The parallel loop was faster than the sequential loop, making the same process in the loop 1.96 times faster than the sequential loop.  This means that parallelization reduced the execution time by approximately 49% ((1 - 1/1.96) * 100). Adding the computationally heavy task of a matrix inversion computation where n = 400, parallelization was more effective and increased efficiency over the simpler loops we completed in Step 13.  
+
+When the n for the matrix inversion was doubled (n = 800), the parallel loop was still faster than the sequential loop, by a factor of 3.71 (meaning it was 3.71 times afster than the sequential loop). This means parallelization reduced execution time by approximately 73% ((1 - 1/3.71) * 100). Increasing the n of the computation made the computational workload increase, making paralleization more efficient.   
+
+Therefore we can say through this iterative test of parallel versus sequential loops that as n increases, the speedup factor of run time improves because the worload per core increases, making parallel execution more efficient. This suggests that for highly computationally intensive tasks like a large matrix inversion, parallel processing significantly improves efficiency, cutting execution time over 70% in this case.  
+
+```{r Question14part1, warning=FALSE}
+
+### 14)	Repeat the two loops above, but include the following time-consuming computation in each iteration: 
+# n <- 400
+# solve(matrix(rnorm(n*n),n,n)) 
+# Don’t assign or return the result of this matrix inversion, just let it run without using it.  Was the parallel loop faster than the sequential loop?  If a different loop was faster than before, why do you think this is so?  Show how the runtime changes when n is set to 1000 (or the highest number that will work on your computer, don’t set n so high that the loop runs more than 3 minutes).
+
+
+# QUESTION 4 PART 1
+####Question 10 loop again (sequential) but this time with a matrix inversion operation  and storing the time it takes 
+
+time_seq <- system.time({
+  overlap_results_slow <- foreach(date = unique(pm25_sf$Date), .combine = "rbind") %do% {
+    
+    #a time-consuming computation
+    n <- 400
+    solve(matrix(rnorm(n*n), n, n))  # This runs but doesn't store the result
+
+    #filter data for the current date
+    pm25_day <- pm25_sf %>% filter(Date == date)
+    smoke_day <- smokepolys %>% filter(Date == date)
+
+    #ensure valid smoke polygons
+    smoke_day <- st_make_valid(smoke_day)
+
+    #count how many plumes overlap each monitor
+    pm25_day <- pm25_day %>%
+      mutate(
+        num_plumes = sapply(geometry, function(pt) {
+          sum(st_intersects(pt, smoke_day, sparse = FALSE))
+        }),
+        plume_present = as.integer(num_plumes > 0)
+      )
+
+    return(pm25_day)
+  }
+})
+
+
+#how much time did it actually take 
+time_seq["elapsed"]
+#326.63 seconds
+
+```
+
+
+```{r Question14Part2, warning=FALSE}
+
+
+# QUESTION 4 PART 2
+
+####Question 11 loop again (parallel) but this time with a matrix inversion operation and storing the time it takes 
+
+# Set up parallel processing
+num_cores <- detectCores() - 1  
+cl <- makeCluster(num_cores)  
+registerDoParallel(cl)
+
+time_par <- system.time({
+  overlap_results_slow_parallel <- foreach(date = unique(pm25_sf$Date), 
+                                           .combine = "rbind", 
+                                           .packages = c("sf", "dplyr")) %dopar% {
+    
+    # Time-consuming computation
+    n <- 400
+    solve(matrix(rnorm(n*n), n, n))  # This runs but isn't stored
+
+    # Filter data for the current date
+    pm25_day <- pm25_sf %>% filter(Date == date)
+    smoke_day <- smokepolys %>% filter(Date == date)
+
+    # Ensure valid smoke polygons
+    smoke_day <- st_make_valid(smoke_day)
+
+    # Count how many plumes overlap each monitor
+    pm25_day <- pm25_day %>%
+      mutate(
+        num_plumes = sapply(geometry, function(pt) {
+          sum(st_intersects(pt, smoke_day, sparse = FALSE))
+        }),
+        plume_present = as.integer(num_plumes > 0)
+      )
+
+    return(pm25_day)
+  }
+})
+
+
+
+time_par["elapsed"]
+#166.34
+
+```
+
+
+```{r Question14Part3}
+
+# QUESTION 4 PART 3
+
+speedup_factor_slow <- time_seq["elapsed"] / time_par["elapsed"]
+speedup_factor_slow
+
+##1.963 sec
+#this means it took a lot longer to do these matrix inversion computations than the simpler loops above 
+#almost double the time it took for the original loops took both the parallel and sequential loops a lot more time 
+
+
+```
+
+
+```{r Question14Part4}
+
+# QUESTION 4 PART 4
+
+#now we do  n = 800
+
+####Question 10 loop again (sequential) but this time with a matrix inversion operation n = 800 and storing the time it takes 
+
+n <- 800
+
+
+time_seq_1000 <- system.time({
+  overlap_results_slow_1000 <- foreach(date = unique(pm25_sf$Date), .combine = "rbind") %do% {
+    
+    # Time-consuming computation with n = 1000
+    solve(matrix(rnorm(n*n), n, n))  
+
+    # Filter data for the current date
+    pm25_day <- pm25_sf %>% filter(Date == date)
+    smoke_day <- smokepolys %>% filter(Date == date)
+
+    # Ensure valid smoke polygons
+    smoke_day <- st_make_valid(smoke_day)
+
+    # Count how many plumes overlap each monitor
+    pm25_day <- pm25_day %>%
+      mutate(
+        num_plumes = sapply(geometry, function(pt) {
+          sum(st_intersects(pt, smoke_day, sparse = FALSE))
+        }),
+        plume_present = as.integer(num_plumes > 0)
+      )
+
+    return(pm25_day)
+  }
+})
+
+
+time_seq_1000["elapsed"]
+#995.88 sec
+
+
+```
+
+
+
+
+```{r Question14part5}
+
+# QUESTION 4 PART 5
+
+#now we do parallel again but with n = 800
+
+n <- 800
+
+# Set up parallel processing
+num_cores <- detectCores() - 1  
+cl <- makeCluster(num_cores)  
+registerDoParallel(cl)
+
+time_par_1000 <- system.time({
+  overlap_results_slow_parallel_1000 <- foreach(date = unique(pm25_sf$Date), 
+                                                .combine = "rbind", 
+                                                .packages = c("sf", "dplyr")) %dopar% {
+    
+    # Time-consuming computation with n = 1000
+    solve(matrix(rnorm(n*n), n, n))  
+
+    # Filter data for the current date
+    pm25_day <- pm25_sf %>% filter(Date == date)
+    smoke_day <- smokepolys %>% filter(Date == date)
+
+    # Ensure valid smoke polygons
+    smoke_day <- st_make_valid(smoke_day)
+
+    # Count how many plumes overlap each monitor
+    pm25_day <- pm25_day %>%
+      mutate(
+        num_plumes = sapply(geometry, function(pt) {
+          sum(st_intersects(pt, smoke_day, sparse = FALSE))
+        }),
+        plume_present = as.integer(num_plumes > 0)
+      )
+
+    return(pm25_day)
+  }
+})
+
+
+time_par_1000["elapsed"]
+#268.37
+
+
+```
+
+
+
+
+```{r Question14part6}
+
+# QUESTION 4 PART 6
+
+#now we compare the times for n = 800
+speedup_factor_1000 <- time_seq_1000["elapsed"] / time_par_1000["elapsed"]
+speedup_factor_1000
+
+#3.71 sec
+#parallelized loop is now 3.71x faster than the sequential loop
+
+```
+
+
+
+
+### Step 15 
+
+To assess the impact of parallel processing scalability, the parallel loop from Step 14 was repeated while systematically varying the number of cores used for execution, in order to evaluate how increasing computational parallelism affects processing time. A visual of this change in computation based on cores available is shown in **Figure 2**.   
+
+The steps of this process include the following (while tracking time elapsed of each task):   
+
+1) Registered parallel clusters using 1 to (total cores - 1) cores, leaving one core free for system operations.
+
+2) Ran the parallel loop (%dopar%) for each core configuration, measuring execution time.
+
+3) Recorded elapsed times for each core count to assess performance scaling.
+
+4) Visualized execution time vs. number of cores in Figure 2, using ggplot2.  
+
+
+
+```{r Question15}
+
+### 15)	Repeat the parallel loop from the previous step but registering only 1 core, 2 cores, 3 cores, … up to one less than the number of cores on your computer. Plot how the run time changes with the number of cores. Describe what you find. If you only have one or two cores on your computer, please let me know.
+
+total_cores <- detectCores()
+max_cores <- total_cores - 1
+
+
+
+# Define storage for results
+core_counts <- 1:max_cores
+elapsed_times <- numeric(length(core_counts))
+
+# Time-consuming computation size
+n <- 800  # Keep it at 800 for consistency
+
+for (i in seq_along(core_counts)) {
+  
+  num_cores <- core_counts[i]
+  
+  # Set up parallel processing
+  cl <- makeCluster(num_cores)
+  registerDoParallel(cl)
+  
+  # Measure execution time
+  time_par_varied <- system.time({
+    overlap_results_parallel_varied <- foreach(date = unique(pm25_sf$Date), 
+                                              .combine = "rbind", 
+                                              .packages = c("sf", "dplyr")) %dopar% {
+      
+      # Heavy computation
+      solve(matrix(rnorm(n*n), n, n))  
+
+      # Filter data for the current date
+      pm25_day <- pm25_sf %>% filter(Date == date)
+      smoke_day <- smokepolys %>% filter(Date == date)
+
+      # Ensure valid smoke polygons
+      smoke_day <- st_make_valid(smoke_day)
+
+      # Count how many plumes overlap each monitor
+      pm25_day <- pm25_day %>%
+        mutate(
+          num_plumes = sapply(geometry, function(pt) {
+            sum(st_intersects(pt, smoke_day, sparse = FALSE))
+          }),
+          plume_present = as.integer(num_plumes > 0)
+        )
+
+      return(pm25_day)
+    }
+  })
+
+  # Store elapsed time
+  elapsed_times[i] <- time_par_varied["elapsed"]
+
+  # Stop the cluster after each iteration
+  stopCluster(cl)
+}
+
+# Store results in a data frame
+timing_results <- data.frame(Cores = core_counts, Time = elapsed_times)
+
+
+
+
+#visualize in a plot
+ggplot(timing_results, aes(x = Cores, y = Time)) +
+  geom_line(color = "blue") +
+  geom_point(size = 3, color = "red") +
+  labs(title = "Fig 2. Execution Time vs. Number of Cores",
+       x = "Number of Cores Used",
+       y = "Elapsed Time (seconds)") +
+  theme_minimal()
+
+```
+
+**Figure 2** shows the time it takes to execute a task based on the number of cores used for a parallel loop. The execution time decreases as the number of cores increases, so 1 core takes ~470 seconds to process, 2 cores takes ~360 seconds, and 3 cores takes ~310 seconds. The decrease in time is steepest between 1 and 2 cores, then slows between 2 and 3 cores.  
+
+This means that adding more cores to parallelization reduces execution time, however there may be diminishing returns after a certain number of cores are in use.
+
+
+
+### Step 16
+
+To evaluate the relationship between daily PM2.5 concentrations and smoke plume overlap, a linear regression model was constructed. The log-transformed PM2.5 concentration (log_pm25) was used as the dependent (outcome) variable, while the number of overlapping plumes (num_plumes), categorical calendar month (month), and monitor ID (monitor_id) were included as independent (predictor) variables.  
+
+Any missing or zero PM2.5 measurements were filtered out to ensure valid regression results. The log-transformed PM2.5 concentration was used to stabilize variance and improve interpretability of the results. A fitted linear regression model was used to estimate the association between smoke plumes (predictor) and PM2.5 (outcome). The results are displayed in **Table 1**.   
+
+
+```{r Question16}
+
+###16)	Regress the log of the daily monitor PM2.5 concentration against the number of overlapping plumes, the categorical calendar month, and the categorical monitor ID. Present the results in a table.  Explain the association you estimated between concentration and plume overlap count.
+
+#colnames(overlap_results_parallel)
+
+
+#summary(model_data$arithmetic_mean)
+
+
+model_data <- overlap_results_parallel %>%
+  filter(!is.na(arithmetic_mean) & arithmetic_mean > 0) %>%  #remove missing or zero values
+  mutate(
+    log_pm25 = log(arithmetic_mean),  
+    month = factor(format(Date, "%m")),  
+    monitor_id = factor(site_number)  
+  )
+
+
+model <- lm(log_pm25 ~ num_plumes + month + monitor_id, data = model_data)
+summary(model)
+
+
+
+model_results <- tidy(model, conf.int = TRUE)  # Get regression results with confidence intervals
+print(model_results)
+
+
+# Tidy model output and rename columns
+model_results_clean <- tidy(model, conf.int = TRUE) %>%
+  rename(
+    Term = term,
+    Estimate = estimate,
+    `Standard Error (SE)` = std.error,
+    `Test Statistic` = statistic,
+    `p-value` = p.value,
+    `Lower 95% CI` = conf.low,
+    `Upper 95% CI` = conf.high
+  )
+
+model_results_clean %>%
+  kable(format = "html", digits = 3, caption = "Table 1. Regression Results: Log PM2.5 and Smoke Plume Count") %>%
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"), full_width = FALSE)
+
+
+
+```
+
+
+
+**Table 1** shows the regression results of the log of PM2.5 and smoke plume count. These results are discussed further in Step 17 and in the Results section. 
+
+
+
+## Results
+
+
+### Step 17
+
+```{r Question17}
+exp(0.252) - 1
+
+```
+
+**Table 1** shows that the regression results estimate for the number of plumes was 0.252. In order to interpret the effect of one additional smoke plume (as the PM2.5 measure was log-transformed), we will exponentiate the coefficient, resulting in 0.286.   
+
+This means that for each additional overlapping smoke plume, daily PM2.5 concentrations increase by 28.6% (95% CI: 27.1% to 30.0%, p < 0.001), holding month and monitor ID constant. This statistically significant association supports the use of HMS smoke polygons as a valuable predictor of wildfire-related air pollution exposure.  
+
+In other words, this means areas with more overlapping smoke plumes tend to experience significantly higher PM2.5 pollution levels.
+
+Additionally, PM2.5 concentrations were significantly lower in May (β = -0.194, 95% CI: -0.263 to -0.126, p < 0.001) and June (β = -0.081, 95% CI: -0.150 to -0.012, p = 0.021), likely due to reduced wildfire activity.  
+
+In contrast, PM2.5 concentrations were significantly higher in July (β = 0.389, 95% CI: 0.321 to 0.457, p < 0.001), aligning with peak wildfire season and increased smoke presence.  
+
+**Figure 1**, a spatial visualization of smoke plume polygons and PM2.5 concentrations recorded at air quality monitoring stations on day 238 of 2020, supports the statistical findings from the regression as PM2.5 concentrations tend to be higher in areas with overlapping, denser smoke coverage. However, some areas within the plume coverage zones show lower PM2.5 levels, highlighting potential limitations in using remote-sensed smoke data as a sole predictor of surface-level air quality.  
+
+The results of this analysis confirm that HMS smoke polygons are a valuable in characterizing ground-level concentrations. he strong and positive relationship between the number of plumes and PM2.5 indicates that more smoke detected by HMS is strongly associated with higher particulate matter pollution.  
+
+However, the results also suggest seasonal variation—PM2.5 was significantly lower in May and June and higher in July, likely reflecting wildfire season trends.  
+
+## Discussion 
+
+This study examined the relationship between daily PM2.5 concentrations recorded at ground-level monitoring stations and the presence of overlapping Hazard Mapping System (HMS) smoke plume polygons during wildfire events in Montana, Idaho, and Wyoming in 2020. The regression analysis revealed a significant positive association between the number of overlapping smoke plumes and PM2.5 concentrations (estimate = 0.252, p < 0.001, 95% CI: 0.240 to 0.263). These findings suggest that HMS smoke polygons provide useful information for characterizing air quality impacts from wildfire smoke, but also highlight potential limitations in their ability to fully capture variations in ground-level PM2.5 concentrations.  
+
+The observed relationship between PM2.5 and smoke plumes aligns with expectations, as wildfire emissions contribute substantially to fine particulate pollution in affected regions (Burke et al., 2023). **Figure 1** illustrates the spatial overlap between detected smoke plumes and PM2.5 monitoring stations, reinforcing the statistical findings. However, not all areas within smoke-affected regions exhibited high PM2.5 concentrations, suggesting that factors beyond plume presence—such as atmospheric dispersion, meteorological conditions, and topography—may influence ground-level pollutant levels.  
+
+The month-specific coefficients in the regression model indicate that PM2.5 concentrations varied seasonally, likely reflecting differences in wildfire activity, meteorology, and regional air quality patterns. Additionally, the inclusion of monitor ID as a categorical variable controlled for site-specific factors, such as elevation, proximity to pollution sources, and local meteorological effects. While the strong statistical association between PM2.5 and smoke plumes suggests that HMS polygons are a valuable tool for air quality assessments, the reliance on satellite-based observations introduces uncertainty due to cloud cover, sensor limitations, and differences in vertical smoke distribution.  
+
+Some limitations of this analysis include the interpretation of HMS smoke polygon measures, as it focuses on smoke that is aloft, not necessarily ground-level smoke, making it difficult to be used as a predictor of PM2.5 levels on the ground. Additionally, meteorological variables such as wind and other weather events were not accounted for in this analysis, which would play a significant role in smoke and PM2.5 dispersion across the region.   
+
+These findings have important implications for wildfire smoke monitoring and public health assessments. While HMS smoke polygons serve as a useful indicator of smoke presence and potential air quality impacts, they should be used in conjunction with ground-based measurements and meteorological modeling to provide a more complete picture of wildfire smoke exposure (Liu et al., 2023). Future research could refine the predictive capacity of HMS polygons by incorporating real-time meteorological data and ground-level data to predict PM2.5 levels.    
+
+
+## References 
+
+Aguilera, R., Corringham, T., Gershunov, A., & Benmarhnia, T. (2021). Wildfire smoke impacts respiratory health more than fine particles from other sources: Observational evidence from Southern California. Nature Communications, 12(1), 1493. https://doi.org/10.1038/s41467-021-21708-0
+
+Burke, M., Childs, M. L., de la Cuesta, B., Qiu, M., Li, J., Gould, C. F., Heft-Neal, S., & Wara, M. (2023). The contribution of wildfire to PM2.5 trends in the USA. Nature, 622(7984), 761–766. https://doi.org/10.1038/s41586-023-06522-6
+
+Gerretsen, Gray, & Henriques. (2025, January 13). The far-reaching impacts of wildfire smoke – and how to protect yourself. BBC. https://www.bbc.com/future/article/20240213-unhealthy-air-how-pollution-changes-your-body-and-mind
+
+Liu, T., Panday, F. M., Caine, M. C., Kelp, M., Pendergrass, D. C., & Mickley, L. (2023). Is the smoke aloft? Caveats regarding the use of the Hazard Mapping System (HMS) smoke product as a proxy for surface smoke presence across the United States. https://eartharxiv.org/repository/view/5932/
+
+
+
+
+
+
+
+```{r stopcluster}
+
+# Step 3: Stop the cluster when ALL parallel tasks are done
+#stopCluster(cl)
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

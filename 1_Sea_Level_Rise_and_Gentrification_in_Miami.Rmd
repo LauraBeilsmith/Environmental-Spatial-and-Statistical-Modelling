@@ -1,0 +1,1159 @@
+---
+title: "Lab Assignment 1"
+output:
+  html_document:
+  pdf_document: default
+---
+
+
+
+# Sea Level Rise Gentrification in Miami
+#### Laura Beilsmith
+#### University of Colorado School of Public Health
+#### February 17, 2025
+
+
+## Abstract
+
+Sea level rise and increased flooding in Miami-Dade County, Florida, have raised concerns about climate gentrification, wherein wealthier residents relocate from coastal areas to higher-elevation inland neighborhoods, meaning lower-income community members are displaced. This study examines whether historically disadvantaged groups—Black/African American residents, Hispanic/Latino residents, and lower-income populations—have become more concentrated in lower-elevation census tracts over time. Using tract-level data from the American Community Survey (ACS) for 2011 and 2019, sociodemographic distributions across elevation levels were assessed. Elevation data were obtained from the elevatr R package, and linear regression models were applied to estimate associations between elevation and population proportions in 2011, 2019, and changes between years.
+Results indicate that in 2011 and 2019, Black residents were significantly more concentrated in higher-elevation tracts, while Hispanic and lower-income residents were more likely to reside in lower-elevation areas. Sensitivity analyses restricting the sample to census tracts below 3 meters did not meaningfully change these findings. No significant evidence suggested that population shifts between 2011 and 2019 differed by elevation. These findings do not support large-scale displacement of historically disadvantaged groups into lower-elevation areas, though more quantitative evidence is needed. Future research should incorporate housing market dynamics and long-term migration trends to better assess climate gentrification risks in Miami-Dade County.
+
+
+## Introduction 
+
+Sea level rise has been a concern in the Miami, Florida area since approximately the 1980’s, although the rate of sea level rise has nearly doubled in just the past decade, heightening the need for climate-focused action (Florida Climate Center, 2016). While previous studies have focused on the economic impacts and biological impacts of these rapid increases in sea level rise, tidal flooding, and hurricane intensity, emerging social-ecological studies have suggested the idea that climate change is also rapidly changing urban demographics (Kang, 2020; Buchanan et al., 2020). Climate gentrification, or the displacement of historically underserved communities as wealthier people move to safer areas of high elevation, away from climate-driven risks, could result in already-vulnerable communities becoming more vulnerable as housing prices rise and residents are forced to move away from their homes (Santiago, 2020).   
+
+Recent reports have highlighted how these shifts are occurring in Miami, particularly in historically Black and Hispanic neighborhoods, where rising property values and increased investment are pricing out long-term residents (Santiago, 2020; Martinich, 2012). As wealthier residents seek climate-resilient housing, vulnerable populations in places like Miami’s Little Haiti, home to many low-income Haitian immigrants, may be pushed into lower-elevation areas that are at greater risk of recurrent flooding and infrastructure degradation.  
+
+Despite growing recognition of climate gentrification, limited statistical research has quantified how historically marginalized and climate-vulnerable groups are being impacted by these demographic shifts. This analysis aims to examine whether historically disadvantaged groups, particularly Black/African American and Hispanic/Latino residents, have become increasingly concentrated in lower-elevation census tracts in Miami-Dade County between 2011 and 2019. Additionally, this analysis will investigate whether residents living below 100% and 200% of the federal poverty level have experienced similar patterns of relocation.  
+
+Ultimately this study seeks to answer the question: Have historically disadvantaged groups in Miami-Dade County moved into lower-elevation census tracts as concerns over sea level rise have intensified from the years 2011-2019? To examine these associations, the American Community Survey (ACS) census tract-level demographic data for 2011 and 2019, alongside elevation data from the elevatr R package, to assess whether shifts in population distribution align with expectations of climate gentrification. R and R Studio will be used for all statistical analyses and visualizations in this study.  
+
+By conducting linear regression analyses that compare demographic trends across low- and high-elevation census tracts, this study provides statistical evidence on whether climate change is exacerbating social inequities in Miami. Results from this research may help inform urban planning, policy interventions, and adaptation strategies to mitigate the displacement of vulnerable communities in climate-impacted regions.  
+
+
+```{r setup, echo=TRUE, message=FALSE, warning=FALSE}
+
+knitr::opts_chunk$set(attr.source='.numberLines')
+
+#load libraries we will need
+library(tidyverse)
+library(tidycensus)
+library(dplyr)
+library(sf)
+library(sp)
+library(tmap)
+library(tmaptools)
+library(elevatr)
+library(raster)
+library(terra)
+library(ggplot2)
+library(OpenStreetMap)
+library(broom)
+library(knitr)
+library(kableExtra)
+
+
+
+#census key
+mykey <- "48c0c2d9937ceef2e7172dc67b35102a5844226b" #LB key
+
+```
+
+## Methods 
+
+#### Study Design and Description of Data Sources 
+
+This study investigates the relationship between elevation and changes in the demographic composition of Miami-Dade County census tracts between 2011 and 2019. Data from the American Community Survey (ACS) 5-year estimates tables was used to extract population counts for key sociodemographic groups, and the elevatr package in R to obtain elevation data. Spatial analyses were conducted using the sf, tmap, and raster packages in R. R and RStudio version 4.4.2 was used for all analyses and visualizations. 
+
+#### Study Population, Variables, and Inclusion Criteria
+Among the census tracts in Miami-Dade County, sociodemographic data were used to calculate population proportions for: 1) Black/African American residents, 2) Hispanic/Latino residents, 3) residents below 100% of the federal poverty level, and 4) residents between 100% and 200% of the federal poverty level.
+The outcome this analysis intends to measure is percentage of each sociodemographic group within each census tract in 2011 and 2019, and the main predictor variable includes elevation (measured as continuous and binary depending on the analysis done). 
+
+Census tract-level data were from ACS 5-year estimates for both 2011 and 2019 using the tidycensus package. The variables extracted from these ACS tables include: 1) Total population, 2) Black/African American population, 3) Hispanic/Latino population, and 4) Residents below 100% and 200% of the poverty level. 
+The get_acs() function was used to ensure the geography level retrieved was census tract. 
+
+
+The variables for sociodemographic factors are determined by ACS. "Poverty status" is determined by taking a household's total income and comparing this to household size and composition. Race and ethnicity is categoried as Black/African American, and Hispanic/Latino. 
+
+
+```{r Question1, results='hide', message=FALSE}
+
+
+#define ACS variables using B17026 instead of C17002
+census_vars <- c(
+  total_pop = "B01003_001",  
+  black_pop = "B02001_003",
+  hispanic_pop = "B03003_003",
+  
+  #poverty Levels (Using B17026 at the census tract level, not block level)
+  #for poverty we have to add together separate rows in the ACS tables: 
+  poverty_100 = c("B17026_002", "B17026_003", "B17026_004"),  # Below 100% poverty
+  poverty_200 = c("B17026_002", "B17026_003", "B17026_004", 
+                  "B17026_005", "B17026_006", "B17026_007", 
+                  "B17026_008", "B17026_009")  # 100-200% poverty
+)
+
+#define years of interest
+years <- c(2011, 2019)
+
+#function to get ACS data for a given year
+get_census_data <- function(year) {
+  get_acs(
+    geography = "tract",
+    variables = census_vars,
+    state = "FL",
+    county = "Miami-Dade",
+    year = year,
+    survey = "acs5",
+    geometry = TRUE #keep spatial data
+  ) %>%
+  mutate(year = year)  #add year column
+}
+
+#download ACS data for 2011 and 2019 and combine them
+miami_data <- map_dfr(years, get_census_data)
+
+#check that both years are included
+table(miami_data$year)
+
+
+
+```
+
+#### Data Cleaning and Handling Missingness
+The raw ACS data was reshaped in to a wide format in order to account for different sociodemographic groups and years in separate columns. Different poverty categories (up to 100%, levels between 100% - 200%, and over 200%) were aggregated to create variables for populations below 100% the poverty level, and those below 200% of the poverty level to ensure measurement of only those below 100% and between 100% - 200% poverty level. 
+
+```{r Question1_continued}
+
+
+#wide structuring the data 
+miami_wide <- miami_data %>%
+  dplyr::select(GEOID, NAME, year, variable, estimate, moe, geometry) %>%  # Keep relevant columns
+  pivot_wider(names_from = variable, values_from = c(estimate, moe)) %>%  # Pivot estimates & MOE
+  arrange(year, GEOID)  # Sort data by year and census tract
+
+#just look at what all the column names are now: 
+colnames(miami_wide)
+
+
+#reformatting the data and adding poverty % columns together to get aggregate below 100% and 100-200%
+#create variable for poverty below 100% and 100-200% 
+miami_wide_2 <- miami_wide %>%
+  mutate(
+    poverty_100 = estimate_poverty_1001 + estimate_poverty_1002 + estimate_poverty_1003,
+    poverty_200 = estimate_poverty_2004 + estimate_poverty_2005 + estimate_poverty_2006 + 
+                  estimate_poverty_2007 + estimate_poverty_2008
+  )
+
+```
+
+
+
+In order to compare each demographic group relative to the total population, percentage of each sociodemographic group relative to the total population within each census tract was calculated.
+
+
+2011 and 2019 datasets were merged, retaining only the 2019 spatial geometries to ensure the geometries between the years did not conflict. 
+
+
+To address missing geometries, any rows without geometry data were dropped from the dataset. 
+
+
+```{r Question2}
+
+### 2)	Calculate the percentage of Black/African-Americans, the percentage of Hispanic/Latinos, the percentage of people below 100% of the poverty level, and the percentage below 200% of the poverty level in each tract. Do this for both 2011 and 2019 and then merge the two years’ data together, retaining the polygons from 2019. You should not need to use a spatial join. Get rid of any empty geometries. Show the first 10 rows of the resulting joined object.
+
+#calculating percentage of black/african amerians 
+miami_wide_pct <- miami_wide_2 %>%
+  mutate(
+    pct_black = ifelse(estimate_total_pop > 0, (estimate_black_pop / estimate_total_pop) * 100, NA),
+    pct_hispanic = ifelse(estimate_total_pop > 0, (estimate_hispanic_pop / estimate_total_pop) * 100, NA),
+    pct_poverty_100 = ifelse(estimate_total_pop > 0, (poverty_100 / estimate_total_pop) * 100, NA),
+    pct_poverty_200 = ifelse(estimate_total_pop > 0, (poverty_200 / estimate_total_pop) * 100, NA)
+  )
+
+
+```
+
+
+```{r Question2_merging}
+
+#1: Remove geometry from 2011 before merging
+miami_2011 <- miami_wide_pct %>%
+  filter(year == 2011) %>%
+  st_drop_geometry() %>%  #drop spatial data
+  dplyr::select(GEOID, pct_black, pct_hispanic, pct_poverty_100, pct_poverty_200)  #keep only cols we need
+
+#2: retain geometry from 2019
+miami_2019 <- miami_wide_pct %>%
+  filter(year == 2019)  #keep geometry for this one
+
+#3: Merge the two datasets
+miami_final <- miami_2019 %>%
+  left_join(miami_2011, by = "GEOID", suffix = c("_2019", "_2011"))
+
+#4: Remove empty geometries (similar to filtering non-matching HOLC areas)
+miami_final <- miami_final %>%
+  filter(!st_is_empty(geometry))
+
+colnames(miami_final)
+#final rows = 518 
+
+```
+
+
+#### Mapping Sociodemographic Distributions
+
+In order to visualize proportions of each sociodemographic group across census tracts in each chosen year, OpenStreetMap was utilized to create maps with overlays of each demographic factor in each year. 
+
+
+```{r Question3_java, cache=TRUE}
+
+### 3)	Map the proportions of these four groups in tracts in 2011 and in 2019 (8 maps in total) using tmap. Make sure the maps are readable to the instructor (fonts appropriately sized, etc…)
+
+
+library(tmap)
+library(tmaptools)
+
+#OpenStreetMap basemap for Miami
+miami_bbox <- st_bbox(miami_final) + c(-0.005,-0.005,0.005,0.005)  #this adjusts bbox
+miami_osm <- read_osm(miami_bbox, relative = TRUE, type = "osm")  #load OSM basemap
+
+#include basemap in function
+create_map <- function(data, var, year, title) {
+  tm_shape(miami_osm) +  #this adds OpenStreetMap background
+    tm_rgb() +  
+    tm_shape(data) +
+    tm_polygons(col = var, 
+                palette = "Blues", 
+                title = title, 
+                style = "jenks", 
+                n = 7, 
+                border.col = "black") +  
+    tm_layout(main.title = paste(title, year), 
+              main.title.size = 1.2, 
+              legend.outside = TRUE)
+}
+
+#Black/African-American proportion
+map_black_2011 <- create_map(miami_final, "pct_black_2011", "2011", "Fig 1.1 Proportion Black")
+map_black_2019 <- create_map(miami_final, "pct_black_2019", "2019", "Fig 1.2 Proportion Black")
+
+#Hispanic/Latino proportion
+map_hispanic_2011 <- create_map(miami_final, "pct_hispanic_2011", "2011", "Fig 1.3 Proportion Hispanic")
+map_hispanic_2019 <- create_map(miami_final, "pct_hispanic_2019", "2019", "Proportion Hispanic")
+
+#below 100% poverty
+map_poverty_100_2011 <- create_map(miami_final, "pct_poverty_100_2011", "2011", "Fig 1.4 Below 100% Poverty")
+map_poverty_100_2019 <- create_map(miami_final, "pct_poverty_100_2019", "2019", "Fig 1.5 Below 100% Poverty")
+
+#between 100% and 200% poverty 
+map_poverty_200_2011 <- create_map(miami_final, "pct_poverty_200_2011", "2011", "Fig 1.6 100-200% Poverty")
+map_poverty_200_2019 <- create_map(miami_final, "pct_poverty_200_2019", "2019", "Fig 1.7 100-200% Poverty")
+
+#look at each map
+map_black_2011
+map_black_2019
+map_hispanic_2011
+map_hispanic_2019
+map_poverty_100_2011
+map_poverty_100_2019
+map_poverty_200_2011
+map_poverty_200_2019
+
+#arranged them in a for ease of viewing in markdown; not necessary in final
+#might be better to arrange them so we can click through them
+# tmap_arrange(map_black_2011, map_black_2019,
+#              map_hispanic_2011, map_hispanic_2019,
+#              map_poverty_100_2011, map_poverty_100_2019,
+#              map_poverty_200_2011, map_poverty_200_2019,
+#              ncol = 2)
+
+
+
+```
+
+
+**Figures 1.1 through 1.7** show a basemap (using OpenStreetMap, a function that provides street maps) overlayed with the census tract data for the proportion of Black/African American residents, Hispanic/Latino residents, residents below 100% of the federal poverty level, and residents below 200% of the federal poverty level for study each year (2011 and 2019) in Miami-Dade County. 
+
+
+Next, using the elevatr package in R, 10 meter horizontal resolution Digital Elevation Map was retrieved for the bounding box of Miami-Dade County census tracts.
+
+
+To analyze elevation variations within Miami census tracts, a dense grid of points across the area of interest were obtained. Elevation values were extracted using the terra::extract() function.
+
+```{r Question4}
+
+### 4)	Use get_elev_raster() from the elevatr package to get elevations over a dense grid of points within the bounding box of your tract sf object.  We haven’t discussed the elevatr package in class, but it interfaces with a 10-meter horizontal /1-meter vertical resolution Digital Elevation Map hosted on Amazon Web Services to return elevations in meters within a region you define.  
+
+#bounding box of census tract data
+miami_bbox <- st_bbox(miami_final) 
+
+#bbox to an sf object 
+miami_bbox_sf <- st_as_sfc(miami_bbox) %>% 
+  st_sf() %>% 
+  st_set_crs(st_crs(miami_final))  #CRS match
+
+#check structure 
+st_crs(miami_final)
+
+
+#elevation raster data for the bounding box
+miami_elev_raster <- get_elev_raster(
+  locations = miami_bbox_sf,  #can use sf object instead of just miami_final dataset
+  z = 12,                     
+  src = "aws",               
+  clip = "bbox",              
+  neg_to_na = TRUE,          
+  override_size_check = TRUE  
+)
+
+print(miami_elev_raster)
+
+
+ 
+#creating a dense grid of points within the bounding box
+grid_spacing <- 0.001  #small density
+x_coords <- seq(miami_bbox$xmin, miami_bbox$xmax, by = grid_spacing)
+y_coords <- seq(miami_bbox$ymin, miami_bbox$ymax, by = grid_spacing)
+
+#full grid of points
+grid_points <- expand.grid(x = x_coords, y = y_coords)
+
+#convert to sf object
+grid_sf <- st_as_sf(grid_points, coords = c("x", "y"), crs = st_crs(miami_final))
+
+#extract elevation values from raster
+grid_sf$elevation <- terra::extract(miami_elev_raster, grid_sf)
+```
+
+**Figure 2** is a map to visualize elevation patterns across Miami-Dade County, overlaid by census tract boundaries in red. 
+
+```{r Question4_Plot}
+
+#plot of elevation grid miami-dade county
+#just to see what the elevation points look like on a map 
+
+tm_shape(grid_sf) +
+  tm_dots(col = "elevation", 
+          palette = "viridis", 
+          size = 0.3,   
+          title = "Elevation (m)") +
+  tm_shape(miami_final) +  
+  tm_borders(col = "red", lwd = 1) +  
+  tm_layout(
+    title = "Fig 2. Elevation (Meters) of Miami Census Tracts", 
+    title.size = 1.5,  
+    title.position = c("center", "top"), 
+    title.color = "white",
+    legend.outside = TRUE, 
+    legend.title.size = 1.0,  
+    legend.text.size = 0.5  
+  )
+
+
+
+```
+
+
+**Figure 2** shows that the majority of census tracts in Miami-Dade county are below 0-10 meters in elevation. 
+
+
+In order to actually quantify differences across census tracts, the mean elevation was calculated for each tract using the raster::extract() function. As the extract() function requires a RasterLayer object, the previous terra SpatRaster object was converted to the format needed for the raster package. 
+
+
+```{r Question5 }
+
+### 5)	Calculate the average elevation within each tract using the extract() function in the raster package (running this function may time several minutes).  The extract() function is like the summarize() function in tidyverse, but is optimized for rasters instead of tibbles or sf objects.
+
+
+#use miami_elev_raster from Question 4
+#convert it to a RasterLayer
+miami_elev_raster_raster <- raster(miami_elev_raster)
+
+#print it so we can see if conversion worked
+print(miami_elev_raster_raster)
+
+#save to temporary file
+writeRaster(miami_elev_raster, "miami_elev.tif", overwrite = TRUE)
+
+#reload that file we just saved again
+miami_elev_raster_raster <- raster("miami_elev.tif")
+
+print(miami_elev_raster_raster)
+
+
+#now we can extract mean elevation for each tract using raster::extract
+#extract() is expecting it to be a raster layer object 
+#so we have to convert since we used terra before 
+
+#this takes forever, do not run again unless necessary! 
+#extracting mean elevation for each census tract
+miami_final$avg_elevation <- raster::extract(
+  x = miami_elev_raster_raster,           #RasterLayer object
+  y = miami_final,                          #census tract sf object
+  fun = mean,                     
+  na.rm = TRUE                     
+)
+
+
+#look at results 
+summary(miami_final$avg_elevation)
+
+#look at first few rows 
+head(miami_final)
+
+```
+
+
+
+In order to visualize elevation trends across census tracts, a choropleth map was generated using the tmap package in R. 
+
+```{r Question6 }
+
+# 6)	Map the tract polygon boundaries on top of the elevation raster.
+
+tm_shape(miami_elev_raster_raster) +  #elev raster
+  tm_raster(palette = "Blues", 
+            title = "Elevation (m)") + 
+  tm_shape(miami_final) +  
+  tm_borders(col = "black", lwd = 0.8) +  #this just makes the borders black 
+  tm_layout(main.title = "Fig 3. Elevation Map with Census Tract Boundaries",
+            main.title.size = 2)
+
+
+```
+
+
+**Figure 3** shows the elevation in meters of the census tract boundaries (combining the raster elevation previously extracted with the census boundaries). Similarly to Figure 2, Figure 3 shows that most of the elevation in meters in Miami are 0-20 meters. 
+
+
+To facilitate statistical analysis, elevation was also converted into a binary variables. First, the median elevation in meters was determined to the 1.57m. Above this median, elevation measurements were considered "high" (coded as 1 in the dataset) and below this median as "low" (0 in the dataset). 
+
+```{r Question7}
+
+### 7)	Map the mean elevation of the tracts.
+
+tm_shape(miami_final) +  #Use the census tract dataset
+  tm_polygons(col = "avg_elevation",  #color by mean elevation per tract
+              palette = "YlOrRd",     #color scheme
+              title = "Mean Elevation (m)", 
+              style = "quantile") +   #breaks it up into quantiles
+  tm_layout(main.title = "Fig 4. Mean Elevation by Census Tract in Miami-Dade County",
+            main.title.size = 2)  
+
+
+
+```
+
+**Figure 4** shows mean elevation in Miami-Dade county in meters, showing more detail compared to Figures 2 and 3 in terms of elevation measurement. The increments of elevation shown are smaller than previous elevations, with all elevations being below 8.48, and many between 0.044 and 1.127.  
+
+
+To better understand elevation distribution statistically (as opposed to geographically on a map as have been visualized thus far), a histogram of elevation distribution across census tracts was created using the package  ggplot2(**Figure 5**). 
+
+```{r Question8 }
+
+### 8)	Plot the histogram of tract mean elevations.
+
+ggplot(data = miami_final, aes(x = avg_elevation)) +
+  geom_histogram(binwidth = 1, fill = "steelblue", color = "black") +
+  labs(title = "Fig 5. Distribution of Mean Elevation Across Census Tracts",
+       x = "Mean Elevation (m)",
+       y = "Count of Census Tracts") +
+  theme_minimal(base_size = 14)  
+
+
+```
+
+**Figure 5** shows that the majority of mean elevations in Miami-Dade county in meters was between 0.0 and 2.5. This means the elevations in this county are skewed towards lower values. 
+
+
+
+### Statistical Analysis 
+To analyze demographic changes across elevation zones and determine significance of the association between census tract demographic factors and elevation, a series of linear regressions were performed. The outcomes are the proportions of each sociodemographic group, while the predictor variable is dichotomous elevation.
+
+Separate models were ran for
+2011 demographic proportions,
+2019 demographic proportions, and changes in population proportions from 2011-2019, with an interaction term for year and elevation. 
+
+The details of these regression analyses are described in more detail in the Results. 
+
+
+## Results 
+
+Prior to running regression models, a binary elevation variable to differentiate low- and high- elevation census tracts were created based on the median elevation of 1.57 meters. 
+
+In order to determine if a significant association exists between elevation and separate sociodemographic factors, a linear regression was run using the lm() function in R. The sociodemographic variable of interest was the outcome, and elevation is the predictor.
+
+The first model looks at Black/African American residents differs between high-elevation and low-elevation census tracts in 2011. In other words, we are regressing the outcome of the proportion of Black/African American residents against the predictor of elevation level. 
+
+
+```{r Question9 }
+
+### 9)	Dichotomize elevation at the median elevation across all tracts. Then, for each of the four population groups, run independent linear regression models (using the lm() function) to answer the questions below. Recall that lm(y ~ a + b +c, data = data_set_object) means to regress y (the outcome) against a, b, and c (the predictors). In this example, y, a, b, and c are all variables in the data_set_object tibble. Your variable names will differ. 
+
+#calculate median elevation
+median_elevation <- median(miami_final$avg_elevation, na.rm = TRUE)
+
+#median elevation is
+print(median_elevation) 
+# 1.57
+
+#create a binary variable: 1 if elevation is above the median, 0 if below
+miami_final_median <- miami_final %>%
+  mutate(elevation_binary = ifelse(avg_elevation > median_elevation, 1, 0))
+
+#above 1.57 is 1, below 1.57 is 0 
+
+
+
+
+```
+
+
+
+#### 2011 Black/African American Residents and Elevation
+```{r Question9a1 }
+
+### 9a.	Was the proportion of residents in each of the four sociodemographic groups (I.e., Black/African Americans, Hispanic/Latino, <100% poverty line, and <200% poverty line) associated with dichotomous tract elevation in 2011, and if so by how much? You will run four models, one for each population group. In these models, the population proportion should be the outcome and dichotomous elevation should be the predictor. 
+
+
+# Black/African American model
+#lm(y ~ a + b +c, data = data_set_object
+#Y outcome is proportion of Black/African American, X predictor is elevation
+lm_black <- lm(pct_black_2011 ~ elevation_binary, data = miami_final_median)
+
+summary(lm_black)
+
+```
+
+
+
+The results of this regression analysis examining the relationship between elevation and the proportion of Black/African American residents in 2011 are that census tracts above median elevation had an 8.003% higher proportion of Black/African American residents compared to lower-elevation tracts (this result was statistically significant, p = 0.000786). The intercept (14.875, p < 2e-16) indicates that census tracts below the median elevation had an average Black/African American population proportion of 14.88%.
+Overall, these results suggest that in 2011, Black residents were more concentrated in higher-elevation tracts.
+
+
+#### 2011 Hispanic/Latino Residents and Elevation
+```{r Question9a2 }
+# Hispanic/Latino model
+lm_hispanic <- lm(pct_hispanic_2011 ~ elevation_binary, data = miami_final_median)
+
+summary(lm_hispanic)
+
+```
+
+The results of this regression analysis examining the relationship between elevation and the proportion of Hispanic/Latino residents in 2011 indicate that census tracts above the median elevation had a 12.56% lower proportion of Hispanic/Latino residents compared to lower-elevation tracts (significant p-value of 2.31e-07). The intercept (68.37, p < 2e-16) suggests that census tracts below the median elevation had an average Hispanic/Latino population proportion of 68.37%.
+
+These results suggest that in 2011, Hispanic/Latino residents were more concentrated in lower-elevation tracts. 
+
+
+
+#### 2011 Below 100% Poverty Level Residents and Elevation
+```{r Question9a3 }
+# Below 100% Poverty model
+lm_poverty_100 <- lm(pct_poverty_100_2011 ~ elevation_binary, data = miami_final_median)
+
+summary(lm_poverty_100)
+```
+
+
+The results of this regression analysis examining the relationship between elevation and the proportion of residents below 100% of the poverty level in 2011 indicate that census tracts above the median elevation had only a 0.068% higher proportion of residents below the poverty line compared to lower-elevation tracts (p = 0.753), but this result was not statistically significant. The intercept (3.23, p < 2e-16) suggests that census tracts below the median elevation had an average proportion of 3.23% of residents below the poverty line.
+
+Overall, these findings indicate that there was no meaningful association between elevation and the proportion of residents below 100% of the poverty line in 2011. This lack of statistical significance suggests that low-income residents were not disproportionately concentrated in either higher- or lower-elevation tracts during 2011. 
+
+
+
+#### 2011 Below 200% Poverty Line Residents and Elevation
+```{r Question9a4 }
+
+# Below 200% Poverty model
+lm_poverty_200 <- lm(pct_poverty_200_2011 ~ elevation_binary, data = miami_final_median)
+
+summary(lm_poverty_200)
+```
+
+
+Finally, the results of this regression analysis examining the relationship between elevation and the proportion of residents below 200% of the poverty level in 2011 indicate that census tracts above the median elevation had a 0.80% lower proportion of residents below 200% of the poverty line compared to lower-elevation tracts (p = 0.00114), and this result was statistically significant. The intercept (5.54, p < 2e-16) suggests that census tracts below the median elevation had an average proportion of 5.54% of residents below 200% of the poverty line.
+
+Overall, these findings indicate that in 2011, residents below 200% of the poverty line were more likely to live in lower-elevation census tracts compared to higher-elevation tracts, and this association was statistically significant. This suggests a pattern where low-income populations were more concentrated in areas with lower elevation.
+
+
+
+
+
+
+#### 2019 Black/African American Residents and Elevation 
+```{r Question9b1 }
+
+### 9b.	Was the proportion of residents in each sociodemographic group associated with dichotomous tract elevation in 2019, and if so by how much? You will run four models, one for each population group. In these models, the population proportion should be the outcome and dichotomous elevation should be the predictor. 
+
+#Black/African American model
+#here, the outcome is stil proportion of Black/African American (just diff year) 
+#and the predictor is still elevation
+lm_black_2019 <- lm(pct_black_2019 ~ elevation_binary, data = miami_final_median)
+
+summary(lm_black_2019)
+
+
+```
+
+This regression analysis examining the association between elevation and the proportion of Black/African American residents in 2019 indicate that census tracts above the median elevation had a 6.56% higher proportion of Black/African American residents compared to lower-elevation tracts (p = 0.00266), and this result was statistically significant. The intercept (13.50, p < 2e-16) suggests that census tracts below the median elevation had an average Black/African American population proportion of 13.50%.
+
+These results are consistent with findings from 2011, where Black residents were more concentrated in higher-elevation tracts compared to lower-elevation tracts. This suggests that the pattern of Black residents living at higher elevations may have persisted into 2019.
+
+#### 2019 Hispanic/Latino Residents and Elevation
+```{r Question9b2 }
+
+# Hispanic/Latino model
+lm_hispanic_2019 <- lm(pct_hispanic_2019 ~ elevation_binary, data = miami_final_median)
+
+summary(lm_hispanic_2019)
+
+
+```
+
+
+The results of this regression analysis indicate that in 2019, census tracts located above the median elevation had a 10.834% lower proportion of Hispanic/Latino residents compared to tracts at lower elevations. This relationship was statistically significant (p = 1.27e-06), suggesting a meaningful difference in Hispanic/Latino population distribution by elevation.
+
+The intercept value of 72.086 (p < 2e-16) implies that the average percentage of Hispanic/Latino residents in lower-elevation tracts was 72.09%. The negative coefficient for elevation_binary (-10.834) suggests that tracts above the median elevation had a lower proportion of Hispanic/Latino residents than lower elevation tracts. Tese resilts are similar to that of 2011. 
+
+
+#### 2019 Below 100% Poverty Level Residents and Elevation
+```{r Question9b3 }
+
+# Below 100% Poverty model
+lm_poverty_100_2019 <- lm(pct_poverty_100_2019 ~ elevation_binary, data = miami_final_median)
+
+summary(lm_poverty_100_2019)
+
+
+```
+
+The regression results examining the relationship between elevation and the proportion of residents living below 100% of the poverty level in 2019 indicate no significant association between elevation and poverty concentration.
+
+The elevation coefficient (-0.1091, p = 0.543) suggests that tracts above the median elevation had a 0.11 percentage point lower proportion of residents below 100% of the poverty line compared to lower-elevation tracts, but this difference is not statistically significant.The intercept (3.0394, p < 2e-16) represents the mean proportion of residents below 100% of the poverty line in lower-elevation tracts, which was 3.04%. These results are similar to 2011, suggesting 100% below poverty level was not a strong predictor of elevation. 
+
+
+#### 2019 Below 200% Poverty Level Residents and Elevation
+```{r Question9b4 }
+
+# Below 200% Poverty model
+lm_poverty_200_2019 <- lm(pct_poverty_200_2019 ~ elevation_binary, data = miami_final_median)
+
+summary(lm_poverty_200_2019)
+
+
+```
+
+Finally, the regression results for the relationship between elevation and the proportion of residents below 200% of the poverty level in 2019 indicate a small but statistically significant association.
+
+The elevation coefficient (-0.4787, p = 0.0347) suggests that tracts above the median elevation had a 0.48 percentage point lower proportion of residents below 200% of the poverty line compared to lower-elevation tracts. This difference is statistically significant at the 0.05 level.The intercept (5.2554, p < 2e-16) represents the mean proportion of residents below 200% of the poverty line in lower-elevation tracts, which was 5.26%. These results are similar to the 2011 results, although the effect size was larger in 2011 than in 2019. This could suggest a weakening of this association between lower-income residents and tract elevation. 
+
+
+ 
+
+
+
+```{r 9c pivot data}
+
+### 9c.	Did the proportion of residents in the four sociodemographic groups increase in low-lying tracts more than in higher elevation tracts in Miami-Dade County between 2011 and 2019?  You will run four models, one for each population group. In these models, the population proportion should be the outcome and categorical year and dichotomous elevation should be the predictors. To answer the question, you will need to include an interaction between year and elevation, e.g., lm(y ~ a*b).
+
+#let's try pivoting the data so that we only run one model for each 
+#group, but each year has two values 2011 and 2019 
+miami_final_long <- miami_final_median %>%
+  dplyr::select(GEOID, elevation_binary, pct_black_2011, pct_black_2019, 
+         pct_hispanic_2011, pct_hispanic_2019, 
+         pct_poverty_100_2011, pct_poverty_100_2019, 
+         pct_poverty_200_2011, pct_poverty_200_2019) %>%
+  pivot_longer(cols = starts_with("pct_"), 
+               names_to = c("group", "year"), 
+               names_pattern = "pct_(.*)_(\\d+)", 
+               values_to = "population_pct") %>%
+  mutate(year = as.factor(year))  # Ensure year is a categorical variable
+
+
+
+```
+
+
+#### 2011 - 2019 Change for Black/African American
+```{r 9c1}
+#AA/Black model
+#population_pct ~ elevation_binary * year
+lm_black_change <- lm(population_pct ~ elevation_binary * year, 
+                      data = miami_final_long %>% filter(group == "black"))
+summary(lm_black_change)
+
+
+```
+
+
+
+This regression analysis assessing the change in the proportion of Black/African American residents between 2011 and 2019 in relation to elevation resulted in the following: The intercept (14.875, p < 2e-16) is the estimated percentage of Black residents in 2011 for low-elevation tracts. Tracts above the median elevation had a higher proportion of Black residents, with a statistically significant elevation effect of 8.003% (p = 0.000442). However, the main effect of year (year2019) was not statistically significant (p = 0.545748), suggesting that the overall proportion of Black residents did not significantly change from 2011 to 2019.
+
+The interaction term between year and elevation was also not significant (p = 0.652423), indicating that the change in Black/African American proportion over time was not significantly different between high- and low-elevation tracts. The overall model explained a small amount of variance (R squared = 0.02158), but the significant elevation effect suggests that higher-elevation tracts continued to have higher proportions of Black residents in both years.
+
+
+
+
+
+
+#### 2011 - 2019 Change for Hispanic/Latino
+```{r 9c2}
+#hispanic model
+lm_hispanic_change <- lm(population_pct ~ elevation_binary * year, 
+                          data = miami_final_long %>% filter(group == "hispanic"))
+summary(lm_hispanic_change)
+
+
+```
+
+
+
+The regression analysis examining the change in the proportion of Hispanic/Latino residents between 2011 and 2019 resulted in the intercept of 68.368 (p < 2e-16), which is the estimated percentage of Hispanic residents in 2011 for low-elevation tracts. The coefficient for elevation (-12.555, p = 6.2e-08) indicates that census tracts above the median elevation had a 12.56 percentage point lower proportion of Hispanic/Latino residents compared to lower-elevation tracts. This difference is statistically significant (p < 0.001), suggesting that Hispanic/Latino residents are more concentrated in lower-elevation areas. 
+
+
+The main effect of year (year2019) was not statistically significant (p = 0.108), suggesting that the overall proportion of Hispanic residents in the county census tracts did not change significantly between 2011 and 2019. Additionally, the interaction term (elevation_binary:year2019) was also not significant (p = 0.598), indicating that the rate of change in the proportion of Hispanic residents over time did not differ significantly between low- and high-elevation tracts.
+
+
+#### 2011 - 2019 Change for 100% Below Poverty Line
+```{r 9c3}
+
+#poverty under 100 model 
+lm_poverty_100_change <- lm(population_pct ~ elevation_binary * year, 
+                             data = miami_final_long %>% filter(group == "poverty_100"))
+summary(lm_poverty_100_change)
+
+```
+
+
+This regression analysis examining the change in the proportion of residents below 100% of the poverty level between 2011 and 2019 resulted in an intercept of 3.231% (p < 2e-16), which represents the estimated percentage of residents below the poverty line in 2011 for low-elevation tracts.
+The coefficient for elevation (0.06755, p = 0.733) indicates that census tracts above the median elevation had a 0.07 percentage point higher proportion of residents below 100% of the poverty line compared to lower-elevation tracts in 2011, but this difference was not statistically significant. This suggests that elevation was not meaningfully associated with the proportion of residents below 100% of the poverty level in 2011.
+
+The main effect of year (year2019 = -0.19194, p = 0.334) was also not statistically significant, indicating that the overall proportion of residents below the poverty line did not change meaningfully between 2011 and 2019. Similarly, the interaction term (elevation_binary:year2019 = -0.17662, p = 0.528) was not significant, suggesting that the rate of change in the proportion of residents below 100% of the poverty line over time did not differ significantly between low- and high-elevation tracts.
+
+These findings indicate that poverty levels remained relatively similar across elevation categories between 2011 and 2019, with no strong evidence of change associated with elevation.
+
+
+
+
+#### 2011 -2019 Change for 200% Below Poverty Line
+```{r 9c4}
+
+#poverty under 200 model
+lm_poverty_200_change <- lm(population_pct ~ elevation_binary * year, 
+                             data = miami_final_long %>% filter(group == "poverty_200"))
+summary(lm_poverty_200_change)
+
+
+```
+
+Finally, this regression analysis examining the change in the proportion of residents below 200% of the poverty level between 2011 and 2019 resulted in an intercept of 5.537% (p < 2e-16), which represents the estimated percentage of residents below 200% of the poverty line in 2011 for low-elevation tracts.
+
+The coefficient for elevation (-0.7998, p = 0.0007) indicates that census tracts above the median elevation had a 0.80 percentage point lower proportion of residents below 200% of the poverty line compared to lower-elevation tracts in 2011. This result was statistically significant (p < 0.001), suggesting that in 2011, poverty rates were slightly higher in low-elevation areas.
+
+The main effect of year (year2019 = -0.2818, p = 0.2335) was not statistically significant, indicating that the overall proportion of residents below 200% of the poverty line did not change meaningfully between 2011 and 2019. Additionally, the interaction term (elevation_binary:year2019 = 0.3211, p = 0.3352) was not significant, suggesting that the rate of change in the proportion of residents below 200% of the poverty line over time did not differ significantly between low- and high-elevation tracts.
+
+These findings suggest that while higher poverty rates were associated with lower elevation in 2011, there is no strong evidence of differential change over time based on elevation.
+
+
+
+The results of each of these analyses are shown in the **Tables 1, 2, and 3** below. 
+
+
+
+```{r 9d1}
+
+#table 9a results
+
+#make each regression result into a list and store it
+models_9a <- list(
+  "Black" = lm_black,
+  "Hispanic" = lm_hispanic,
+  "Poverty <100%" = lm_poverty_100,
+  "Poverty <200%" = lm_poverty_200
+)
+
+#tidy format
+results_9a <- bind_rows(lapply(models_9a, function(model) {
+  tidy(model, conf.int = TRUE)
+}), .id = "Group")
+
+#show table
+kable(results_9a, digits = 3, caption = "Table 1. Regression Results for 2011 (9a)")
+
+
+
+```
+
+
+
+**Table 1** shows the regression results for 2011 in which Black/African American residents were significantly more concentrated in higher-elevation (above the median of 1.57 meters) census tracts, with an 8% higher proportion in areas above the median elevation compared to lower-elevation tracts (95% CI: 3.35, 12.66, p = 0.001). In contrast, Hispanic/Latino residents were significantly more concentrated in lower-elevation tracts, with a 12.56 percentage point lower proportion in higher-elevation areas (95% CI: -17.26, -7.85, p < 0.001).
+
+For residents below 100% of the federal poverty level, the elevation coefficient was not statistically significant, with a small difference of 0.07 percentage points higher in high-elevation tracts (95% CI: -0.36, 0.49, p = 0.753), suggesting no statistically significant association.
+
+However, for residents below 200% of the federal poverty level, higher-elevation tracts had a 0.80 percentage point lower proportion of residents compared to lower-elevation tracts (95% CI: -1.28, -0.32, p = 0.001).
+
+These results suggest that in 2011, Black residents were more concentrated in higher-elevation areas, while Hispanic and lower-income residents were more likely to reside in lower-elevation census tracts.
+
+
+
+
+
+```{r 9d2}
+
+#results table for 9b 
+
+models_9b <- list(
+  "Black" = lm_black_2019,
+  "Hispanic" = lm_hispanic_2019,
+  "Poverty <100%" = lm_poverty_100_2019,
+  "Poverty <200%" = lm_poverty_200_2019
+)
+
+#tidy, with CIs
+results_9b <- bind_rows(lapply(models_9b, function(model) {
+  tidy(model, conf.int = TRUE)
+}), .id = "Group")
+
+kable(results_9b, digits = 3, caption = "Table 2. Regression Results for 2019 (9b)")
+
+
+
+```
+
+
+**Table 2** shows the regression results for 2019, showing that Black/African American residents remained significantly more concentrated in higher-elevation census tracts, with a 6.56% higher proportion in areas above the median elevation compared to lower-elevation tracts (95% CI: 2.29, 10.82, p = 0.003). Similarly to 2011, Hispanic/Latino residents were more concentrated in lower-elevation tracts, with a 10.83 percentage point lower proportion in higher-elevation areas (95% CI: -15.18, -6.49, p < 0.001).
+
+For residents below 100% of the federal poverty level, the association with elevation remained non-significant, with only a 0.11% lower proportion in higher-elevation tracts (95% CI: -0.46, 0.24, p = 0.543), reinforcing the absence of a meaningful relationship. However, for residents below 200% of the federal poverty level, there was a 0.48 percentage point lower proportion in higher-elevation areas (95% CI: -0.92, -0.04, p = 0.035), which was statistically significant.
+
+These results indicate that, in 2019, Black residents continued to be more concentrated in higher-elevation tracts, while Hispanic and lower-income residents remained more prevalent in lower-elevation areas, reflecting similar trends observed in 2011. However, the magnitude of these disparities appears to have slightly decreased over time.
+
+
+
+```{r 9d3 }
+
+# results table for 9c 
+
+models_9c <- list(
+  "Black" = lm_black_change,
+  "Hispanic" = lm_hispanic_change,
+  "Poverty <100%" = lm_poverty_100_change,
+  "Poverty <200%" = lm_poverty_200_change
+)
+
+#put results into table with CIs
+results_9c <- bind_rows(lapply(models_9c, function(model) {
+  tidy(model, conf.int = TRUE)
+}), .id = "Group")
+
+
+kable(results_9c, digits = 3, caption = "Table 3. Regression Results for Population Change 2011-2019 (9c)")
+
+
+
+```
+
+
+**Table 3** presents the regression results examining whether changes in the proportion of residents in four sociodemographic groups varied by elevation between 2011 and 2019.
+
+For Black/African American residents, the estimated proportion in 2011 was 14.88% in lower-elevation tracts (intercept: 14.88, 95% CI: 11.71, 18.04, p < 0.001). Tracts above the median elevation had an 8.00 percentage point higher proportion of Black residents in 2011 (95% CI: 3.55, 12.46, p = 0.0004). The overall change in Black resident proportion from 2011 to 2019 was not statistically significant (year2019 coefficient: -1.38, 95% CI: -5.86, 3.10, p = 0.55). Additionally, the interaction between year and elevation (elevation_binary:year2019) was also non-significant (p = 0.65), suggesting that the change in Black residents' proportion over time did not significantly differ between low- and high-elevation tracts.
+
+For Hispanic/Latino residents, the estimated proportion in 2011 was 68.37% in low-elevation tracts (95% CI: 65.16, 71.58, p < 0.001). Higher-elevation tracts had a significantly lower proportion of Hispanic residents in 2011 by 12.56 percentage points (95% CI: -17.07, -8.04, p < 0.001). The overall countywide proportion of Hispanic residents did not significantly change between 2011 and 2019 (year2019 coefficient: 3.72, 95% CI: -0.82, 8.26, p = 0.11). Furthermore, the interaction term (elevation_binary:year2019) was not significant (p = 0.60), indicating that the change in Hispanic residents' proportion over time did not significantly vary by elevation.
+
+For residents below 100% of the federal poverty level, the baseline proportion in 2011 was 3.23% in low-elevation tracts (95% CI: 2.96, 3.51, p < 0.001), with no significant difference in higher-elevation areas (elevation_binary coefficient: 0.07, 95% CI: -0.32, 0.46, p = 0.73). The proportion of residents below 100% of poverty did not significantly change from 2011 to 2019 (year2019 coefficient: -0.19, 95% CI: -0.58, 0.20, p = 0.33), and the interaction term (elevation_binary:year2019) was also not significant (p = 0.53), suggesting no differential change by elevation.
+
+For residents below 200% of the federal poverty level, the baseline proportion in 2011 was 5.54% in low-elevation tracts (95% CI: 5.21, 5.87, p < 0.001). Higher-elevation tracts had a significantly lower proportion of these residents by 0.80 percentage points in 2011 (95% CI: -1.26, -0.34, p = 0.001). The overall change in proportion between 2011 and 2019 was not significant (year2019 coefficient: -0.28, 95% CI: -0.75, 0.18, p = 0.23), and the interaction term (elevation_binary:year2019) was also non-significant (p = 0.34), indicating no differential change in low- vs. high-elevation areas over time.
+
+The collated results in **Table 3** indicate that in both 2011 and 2019, Black residents were more concentrated in higher-elevation tracts, while Hispanic and lower-income residents were more concentrated in lower-elevation tracts. However, there were no significant changes in these patterns between 2011 and 2019, and no evidence that shifts in population composition over time varied by elevation.
+
+
+
+
+#### Sensitivity Analyses
+A sensitivity analysis was conducted to assess the robustness of the primary regression results by restricting the analysis to census tracts with an average elevation below 3 meters. This threshold was chosen because even under worst-case climate change projections, sea level rise is unlikely to exceed 3 meters by the end of the century. By focusing on lower-elevation tracts, this will help to determine whether the observed relationships between chosen sociodemographic groups and elevation were driven by the highest elevation areas, which may not be as relevant for assessing climate gentrification risks. Using the restricted dataset, the lm() function was used for linear regression. 
+
+If the trends observed in the main analysis persist in the restricted dataset, it would strengthen confidence in the significant results. However, if results differ substantially, it could indicate that high-elevation tracts were driving the significant associations seen in the original analysis. The results of each sensitivty analysis are reported in **Tables 4, 5, and 6**. Significant p-values are highlighted in red.  
+
+
+```{r Question10 }
+
+### 10)	Since even worst case scenarios predict at most 3 meters of sea level rise by the end of the century, the very highest elevation tracts may not be so pertinent to the above analyses. Perform sensitivity analyses of questions 9a-d where you filter to only tracts below 3 meters in elevation.
+
+#filter dataset to tracts below 3 meters in average elevation
+miami_final_sens <- miami_final_median %>%
+  filter(avg_elevation < 3)
+#went from 518 to 494 rows, so lots of tracts below 3 m (which makes sense 
+#based on the maps we saw earlier) 
+
+```
+
+
+```{r 10a}
+
+#Sensitivity analyses for 9a
+
+# Black/African American model (2011)
+lm_black_sens <- lm(pct_black_2011 ~ elevation_binary, data = miami_final_sens)
+summary(lm_black_sens)
+
+# Hispanic/Latino model (2011)
+lm_hispanic_sens <- lm(pct_hispanic_2011 ~ elevation_binary, data = miami_final_sens)
+summary(lm_hispanic_sens)
+
+# Below 100% Poverty model (2011)
+lm_poverty_100_sens <- lm(pct_poverty_100_2011 ~ elevation_binary, data = miami_final_sens)
+summary(lm_poverty_100_sens)
+
+# Below 200% Poverty model (2011)
+lm_poverty_200_sens <- lm(pct_poverty_200_2011 ~ elevation_binary, data = miami_final_sens)
+summary(lm_poverty_200_sens)
+
+```
+
+```{r 10a_Table}
+
+#this will combine regression summaries for 9a
+sens_9a_table <- bind_rows(
+  tidy(lm_black_sens, conf.int = TRUE) %>% mutate(group = "Black"),
+  tidy(lm_hispanic_sens, conf.int = TRUE) %>% mutate(group = "Hispanic"),
+  tidy(lm_poverty_100_sens, conf.int = TRUE) %>% mutate(group = "Below 100% Poverty"),
+  tidy(lm_poverty_200_sens, conf.int = TRUE) %>% mutate(group = "Below 200% Poverty")
+) %>%
+  dplyr::select(group, term, estimate, std.error, statistic, p.value, , conf.low, conf.high) 
+
+#rename the columns something that actually makes sense
+colnames(sens_9a_table) <- c("Group", "Variable", "Estimate", "Std. Error", "t-Statistic", "P-Value", "CI Lower", "CI Upper")
+
+#formatting the table
+kable(sens_9a_table, 
+      digits = 3, 
+      caption = "Table 4. Sensitivity Analysis for 9a (2011) - Tracts Below 3m",
+      format = "html") %>%
+  kable_styling(full_width = FALSE, bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>%
+  column_spec(1, bold = TRUE) %>%  
+  column_spec(6, color = ifelse(sens_9a_table$`P-Value` < 0.05, "red", "black")) 
+
+
+
+```
+
+
+**Table 4** shows the results of the sensitivity analysis for sociodemographic groups and elevation in 2011, but this time only with tracts below 3 meters. Some notable differences in the sensitivity analysis versus the original analysis include:   
+
+Black residents' concentration in higher-elevation areas became slightly stronger when restricted to low-lying tracts (8.57 vs. 8.00 percentage points).  
+
+The effect for Hispanic residents remained almost identical, reinforcing their greater presence in low-elevation tracts.  
+
+The relationship for poverty <100% remained non-significant, supporting the original results that elevation does not influence this group’s distribution.  
+
+The negative association for poverty <200% was slightly weaker (-0.70 vs. -0.80 percentage points), but still statistically significant.  
+
+However, overall, this sensitivity analysis does not substantially change the main conclusions from the full analysis.   
+
+
+
+```{r 10b }
+
+#sensitivity analysis for Question 9b 
+
+
+#Black/African American model (2019)
+lm_black_2019_sens <- lm(pct_black_2019 ~ elevation_binary, data = miami_final_sens)
+summary(lm_black_2019_sens)
+
+#Hispanic/Latino model (2019)
+lm_hispanic_2019_sens <- lm(pct_hispanic_2019 ~ elevation_binary, data = miami_final_sens)
+summary(lm_hispanic_2019_sens)
+
+#Below 100% Poverty model (2019)
+lm_poverty_100_2019_sens <- lm(pct_poverty_100_2019 ~ elevation_binary, data = miami_final_sens)
+summary(lm_poverty_100_2019_sens)
+
+#Below 200% Poverty model (2019)
+lm_poverty_200_2019_sens <- lm(pct_poverty_200_2019 ~ elevation_binary, data = miami_final_sens)
+summary(lm_poverty_200_2019_sens)
+
+
+```
+
+```{r 10b_Table}
+
+#regression summaries combined
+sens_9b_table <- bind_rows(
+  tidy(lm_black_2019_sens, conf.int = TRUE) %>% mutate(group = "Black"),
+  tidy(lm_hispanic_2019_sens, conf.int = TRUE) %>% mutate(group = "Hispanic"),
+  tidy(lm_poverty_100_2019_sens, conf.int = TRUE) %>% mutate(group = "Below 100% Poverty"),
+  tidy(lm_poverty_200_2019_sens, conf.int = TRUE) %>% mutate(group = "Below 200% Poverty")
+) %>%
+  dplyr::select(group, term, estimate, std.error, statistic, p.value, conf.low, conf.high)  
+
+#rename columns
+colnames(sens_9b_table) <- c("Group", "Variable", "Estimate", "Std. Error", "t-Statistic", "P-Value", "CI Lower", "CI Upper")
+
+#table formatting
+kable(sens_9b_table, 
+      digits = 3, 
+      caption = "Table 5. Sensitivity Analysis for 9b (2019) - Tracts Below 3m",
+      format = "html") %>%
+  kable_styling(full_width = FALSE, bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>%
+  column_spec(1, bold = TRUE) %>%  
+  column_spec(6, color = ifelse(sens_9b_table$`P-Value` < 0.05, "red", "black"))
+
+
+```
+
+
+**Table 5** shows the results of the sensitivity analysis for sociodemographic groups and elevation in 2019, restricting the analysis to census tracts below 3 meters in elevation. While most of the results remained the same as the original analysis, the relationship for residents below 200% of the poverty level became non-significant in this analysis.   
+
+The concentration of Black residents in higher-elevation tracts remained significant but was slightly weaker than in the full dataset (7.02 vs. 6.56 percentage points).  
+
+The negative association for Hispanic residents remained, with their proportion being 10.07 percentage points lower in higher-elevation tracts (95% CI: -14.53, -5.62, p < 0.001).  
+For residents below 100% of the federal poverty level, the coefficient remained non-significant (-0.10, p = 0.594), reinforcing the original conclusion that elevation does not meaningfully impact this group's distribution.  
+
+However, the relationship for residents below 200% of the federal poverty level became non-significant in this sensitivity analysis (-0.34 percentage points, p = 0.143), whereas it was statistically significant in the full dataset. The confidence interval (-0.79, 0.11) includes zero, suggesting greater uncertainty in this estimate when only low-lying tracts are considered.  
+
+Overall, the sensitivity analysis supports the robustness of the findings for Black and Hispanic residents in 2019, while the previously significant association for residents below 200% of the poverty level appears to be less stable when only examining low-lying tracts.  
+
+
+
+```{r 10c}
+
+#sensitivity analysis for question 9c
+
+#filter the long format data 
+#filter for tracts below 3 meters elevation
+#use miami_final_sens data to get below 3 meters 
+
+#rename the year column so there is no conflict when pivoting
+miami_final_sens2 <- miami_final_sens %>%
+  rename(year_original = year)  
+
+#pivot the data
+miami_final_sens_long <- miami_final_sens2 %>%
+  pivot_longer(cols = c(pct_black_2011, pct_black_2019, 
+                        pct_hispanic_2011, pct_hispanic_2019,
+                        pct_poverty_100_2011, pct_poverty_100_2019,
+                        pct_poverty_200_2011, pct_poverty_200_2019),
+               names_to = c("group", "year"),
+               names_pattern = "pct_(.*)_(\\d+)",  #group and year extract
+               values_to = "population_pct") %>%
+  mutate(year = as.numeric(year))  #year has to be numeric
+
+
+
+
+
+#now we can filter the data for less than 3 m 
+miami_sens_long_elevation <- miami_final_sens_long %>%
+  filter(avg_elevation < 3)
+
+
+#run the sensitivity analysis using the filtered data 
+
+lm_black_change_sens <- lm(population_pct ~ elevation_binary * year, 
+                           data = miami_sens_long_elevation %>%
+                             filter(group == "black"))
+
+summary(lm_black_change_sens)
+
+
+lm_hispanic_change_sens <- lm(population_pct ~ elevation_binary * year, 
+                              data = miami_sens_long_elevation %>%
+                                filter(group == "hispanic"))
+
+summary(lm_hispanic_change_sens)
+
+
+lm_poverty_100_change_sens <- lm(population_pct ~ elevation_binary * year, 
+                                 data = miami_sens_long_elevation %>%
+                                   filter(group == "poverty_100"))
+
+summary(lm_poverty_100_change_sens)
+
+
+lm_poverty_200_change_sens <- lm(population_pct ~ elevation_binary * year, 
+                                 data = miami_sens_long_elevation %>%
+                                   filter(group == "poverty_200"))
+
+summary(lm_poverty_200_change_sens)
+
+
+
+
+
+```
+
+```{r 10c_Table}
+
+#regression summaries for 9c
+sens_9c_table <- bind_rows(
+  tidy(lm_black_change_sens, conf.int = TRUE) %>% mutate(group = "Black"),
+  tidy(lm_hispanic_change_sens, conf.int = TRUE) %>% mutate(group = "Hispanic"),
+  tidy(lm_poverty_100_change_sens, conf.int = TRUE) %>% mutate(group = "Below 100% Poverty"),
+  tidy(lm_poverty_200_change_sens, conf.int = TRUE) %>% mutate(group = "Below 200% Poverty")
+) %>%
+  dplyr::select(group, term, estimate, std.error, statistic, p.value, conf.low, conf.high) 
+
+
+#this renames columns 
+colnames(sens_9c_table) <- c("Group", "Variable", "Estimate", "Std. Error", "t-Statistic", "P-Value", "CI Lower", "CI Upper")
+
+#format the table
+kable(sens_9c_table, 
+      digits = 3, 
+      caption = "Table 6. Sensitivity Analysis for 9c (2011-2019) - Tracts Below 3m",
+      format = "html") %>%
+  kable_styling(full_width = FALSE, bootstrap_options = c("striped", "hover", "condensed", "responsive")) %>%
+  column_spec(1, bold = TRUE) %>%  
+  column_spec(6, color = ifelse(sens_9c_table$`P-Value` < 0.05, "red", "black"))  
+
+
+
+
+```
+
+
+
+**Table 6** shows the sensitivity analysis results for population change from 2011 to 2019, limited to census tracts below 3 meters in elevation. This analysis shows some substantially different results from the original analysis, including:    
+
+The coefficient for elevation for Black/African American residents in 2011 (400.01, p = 0.63) is higher compared to the original analysis, with a wide confidence interval (-1228.27, 2028.28), indicating a lack of statistical precision. The year coefficient (-0.172, p = 0.55) and the interaction term (-0.195, p = 0.63) are both non-significant, suggesting no differential trend over time between low- and high-elevation tracts.  
+
+
+For Hispanic/Latino residents, the intercept is negative and extremely large (-866.23, p = 0.14), and the elevation coefficient (-390.38, p = 0.64) is similar, with a confidence interval spanning from -2041.83 to 1261.07. The non-significant interaction term (0.188, p = 0.65) further suggests no differential change over time.  
+
+
+For those below 100% of the poverty level, the coefficient for elevation (38.77, p = 0.54) shows a very large but non-significant effect, and the wide confidence interval (-102.02, 179.55) suggests uncertainty. The year effect (-0.024, p = 0.33) and interaction term (-0.019, p = 0.59) are also non-significant.  
+
+Finally, for residents below 200% of the poverty level, the elevation coefficient (-92.41, p = 0.28) suggests a negative relationship, but the wide confidence interval (-260.40, 75.59) and lack of statistical significance indicate imprecision. Similarly, the interaction term (0.046, p = 0.28) does not provide evidence of a meaningful change over time.  
+
+Compared to the original analysis, the sensitivity analysis within low-lying tracts produces highly uncertain estimates with extremely large confidence intervals and non-significant p-values, indicating that restricting to these tracts reduces statistical power and increases uncertainty. No meaningful changes in sociodemographic distributions over time were detected in this restricted analysis.  
+
+
+
+
+## Discussion 
+
+This analysis aimed to investigate whether historically disadvantaged groups have increasingly moved into lower-elevation census tracts in Miami-Dade County, Florida, as climate risks such as sea level rise and tidal flooding impact infrastructure and communities are forced to move from their homes due to the risk of damage. Social issues such as gentrification can also impact communities as beachfront property owners, who tend to be white, move inland to majority non-white neighborhoods. This analysis found that in both 2011 and 2019, Black/African American residents were more concentrated in higher-elevation tracts, while Hispanic/Latino residents and residents below 200% of the federal poverty level were more concentrated in lower-elevation tracts. Residents below 100% of the poverty level did not exhibit a strong association with elevation, suggesting other socioeconomic or structural factors may influence their residential patterns. Sensitivity analyses restricting the dataset to tracts below 3 meters largely supported these findings, with some slight shifts in effect size but no substantial changes in overall patterns.  
+
+These findings align with previous research on climate gentrification in Miami, which suggests that higher-elevation areas historically occupied by lower-income residents, including Black communities, are becoming more desirable due to increasing flood risks in lower-elevation coastal zones (Kenan et al., 2018). The observed patterns of Hispanic and lower-income residents being more concentrated in lower-elevation areas further support concerns that climate gentrification is likely reinforcing pre-existing racial and economic disparities in Miami-Dade County.  
+
+There were several limitations to this analysis and its design. The (ACS) data used in this analysis provides estimates rather than exact population counts, introducing potential margin-of-error issues, particularly in small geographic units like census tracts. The ACS data was also aggregated, meaning significance in certain granular levels of income or poverty status may have been missed. While elevation was analyzed as a binary variable split at the median, more granular elevation data could better capture the potential nuances of flood risk and housing choices, so in future analyses elevation could be used as a continuous variable to capture more detail in the significant associations found. This study also does not incorporate other measures of climate-driven displacement, such as real estate price changes, eviction rates, or migration data, which could provide a more comprehensive understanding of climate gentrification dynamics. In the future, qualitative data describing why certain demographics are moving may be helpful to give context to the significant associations seen in this analysis.   
+
+Overall this analysis provides quantitative evidence for the idea that climate gentrification is influencing residential patterns in Miami-Dade County, with Black residents being more concentrated in higher-elevation areas and Hispanic and lower-income residents remaining in lower-elevation, flood-prone tracts. As Miami and Florida coasts in general are at the forefront of sea level rise adaptation, understanding how climate-driven displacement interacts with housing policies and socioeconomic disparities will be critical in shaping equitable climate resilience policies.   
+
+
+
+## References 
+Buchanan, M. K., Kulp, S., Cushing, L., Morello-Frosch, R., Nedwick, T., & Strauss, B. (2020). Sea level rise and coastal flooding threaten affordable housing. Environmental Research Letters, 15(12), 124020. https://doi.org/10.1088/1748-9326/abb266
+
+Florida Climate Center. (2016). Sea Level Rise—Florida Climate Center. https://climatecenter.fsu.edu/topics/sea-level-rise
+
+Kang, B. J. (2020, February 4). Climate Gentrification in Miami, Florida. ArcGIS StoryMaps. https://storymaps.arcgis.com/stories/2016ca9a583e4769a984d20f83b43eb3
+
+Keenan, J. M., Hill, T., & Gumber, A. (2018). Climate gentrification: From theory to empiricism in Miami-Dade County, Florida. Environmental Research Letters, 13(5), 054001. https://doi.org/10.1088/1748-9326/aabb32
+
+Martinich, J., Neumann, J., Ludwig, L., & Jantarasami, L. (2013). Risks of sea level rise to disadvantaged communities in the United States. Mitigation and Adaptation Strategies for Global Change, 18(2), 169–185. https://doi.org/10.1007/s11027-011-9356-0
+
+Santiago, E. (2020). Weathering the Storm: Climate Gentrification in Miami’s Little Haiti | The Pursuit | University of Michigan School of Public Health | Climate Change | Climate Gentrification | Miami |. Retrieved February 17, 2025, from https://sph.umich.edu/pursuit/2020posts/weathering-the-storm-climate-gentrification-in-miami.html
+

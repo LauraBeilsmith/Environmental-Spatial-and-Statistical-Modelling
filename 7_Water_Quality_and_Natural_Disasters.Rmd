@@ -1,0 +1,655 @@
+---
+title: "Lab Assignment 7"
+output: html_document
+---
+
+#  Water Quality and Natural Disasters
+#### Laura Beilsmith
+#### University of Colorado School of Public Health
+#### April 14, 2025
+
+
+
+## Abstract 
+
+Climate-related disasters such as hurricanes and severe storms increasingly threaten environmental health across the U.S. gulf coast, not just because of the devastation caused to resident's lives, but the harm to infrastructure and ecosystems can lead to significant water pollution. This study investigates whether surface water contaminant concentrations change in the year following federally declared disasters. Water chemistry measurements from the Water Quality Portal were linked to FEMA disaster declarations from Texas, Louisiana, Mississippi, Alabama, and Florida. After filtering to relevant locations and chemical levels, measurements were classified as occurring in the year before or after each disaster. Linear models were used to evaluate changes in median log10-transformed concentrations for 24 chemicals across multiple counties.
+
+The strongest observed effect was for sulfate, which increased by an estimated 0.128 log10 units post-disaster (95% CI: 0.090 to 0.167), corresponding to a 34% rise in concentration. Several chemicals, including ammonia and orthophosphate, also showed small post-disaster increases, though these were not statistically significant. These findings suggest that disasters may move contaminants from agricultural or industrial operations into surface waters, potentially affecting ecological and human health outcomes.
+
+By combining disaster records and high-resolution water quality data, this analysis offers evidence of disaster-related shifts in chemical concentrations and highlights the need for sustained water monitoring in climate-vulnerable regions.
+
+
+## Introduction
+
+Climate-related disasters such as hurricanes, tropical storms, and severe flooding are increasing in frequency and severity along the U.S. Gulf Coast due to climate change (Smith, 2023). These events pose growing risks to both human health and environmental systems, including the quality of surface and groundwater. When disasters happen, they can move pollutants from industrial facilities, residential areas, or wastewater infrastructure, into drinking water sources (Elliot et al., 2024, Mondal et al., 2024). The environmental consequences of these contamination events may persist beyond the initial flooding, affecting ecosystems and drinking water sources in the affected communities for months or years after the initial event.
+
+This study investigates how chemical concentrations in surface water change in the year following a federally declared disaster. The research question of this analysis is: Do surface water contaminant concentrations increase or decrease after federally declared flood- and storm-related disasters in Gulf Coast counties? 
+
+To address this question, data from the Water Quality Portal were joined with FEMA disaster declarations for five states—- Texas, Louisiana, Mississippi, Alabama, and Florida—- across multiple years. By focusing on chemicals of ecological and public health concern, including sulfate, orthophosphate, and ammonia, the study uses log-transformed concentrations and linear modeling to evaluate systematic shifts in water quality before and after disasters. The goal is to assess whether observable and consistent patterns of water contamination emerge across spatial and temporal scales, thereby informing future monitoring and environmental risk assessments in vulnerable coastal communities.
+
+
+```{r setup, include=FALSE}
+
+#load packages 
+library(tidyverse)
+library(tidyr)
+library(dplyr)
+library(sf)
+library(tmap)
+library(tmaptools)
+library(ggplot2)
+library(lubridate)
+library(RAQSAPI)
+library(ggplot2)
+library(tibble)
+library(knitr)
+library(kableExtra)
+library(broom)
+library(OpenStreetMap)
+library(leaflet)
+library(spaMM)
+library(stars)
+library(tidycensus)
+library(stringr)
+library(doParallel)
+library(foreach)
+library(geodata)
+
+```
+
+## Methods
+
+### Study Design and Description of Data Sources
+
+This analysis examines changes in surface water pollutant concentrations in the year following federally declared natural disasters across five Gulf Coast states (Texas, Louisiana, Mississippi, Alabama, and Florida). The goal is to evaluate whether chemical pollutant concentrations in surface water increase or decrease following major flooding and storms.
+
+Disaster data were obtained from the FEMA Disaster Declarations Summaries dataset, which includes information on the type, timing, and geographic scope of official declared disasters. Only disasters attributed to Flood, Hurricane, Severe Storm, Tropical Storm, or Typhoon were obtained for analysis.
+
+Surface water quality data were obtained from the U.S. Geological Survey’s Water Quality Portal. The station metadata file includes site-level characteristics such as location, monitoring type, and geographic identifiers. The water chemistry results file contains pollutant measurements collected over multiple decades. Both datasets were filtered to retain only samples from surface water sites located in the Gulf Coast states. Only measurements with valid units of concentration (including mg/l, ug/l,  ng/l, pg/l, mg/L, ug/L, ng/L, pg/L, ug/g, mg/kg) were analyzed. All analyses were conducted in R version 4.4.2.
+
+### Step 1
+
+R packages required to support the data wrangling, spatial processing, efficient manipulation of large datasets, and memory-efficient reading of large files were read in first and include: the tidyverse package, the tidycensus package, the data.table and dtplyr packages, and the arrow package. 
+
+```{r Q1, warning=FALSE}
+
+#1)	Load the tidyverse, tidycensus, data.table, arrow, and dtplyr packages
+
+library(tidyverse)    
+library(tidycensus)   
+library(data.table)   
+library(arrow)        
+library(dtplyr)       
+
+
+```
+
+### Step 2 
+
+To facilitate joining county-level datasets, the fips_codes dataset from the tidycensus package was used to provide standardized state and county identifiers. New numeric variables were created for both state_code and county_code to make matching simpler in later steps.
+
+```{r Q2}
+
+## 2)	Using the fips_codes data set that comes with tidycensus, add columns for the numeric version of the state_code and county_code variables. 
+
+#load fips_codes and convert state code and county code to numeric
+fips_codes_numeric <- 
+  fips_codes %>% 
+  mutate(
+    state_code_numeric = as.numeric(state_code),
+    county_code_numeric = as.numeric(county_code)
+  )
+
+#see what it looks like, make sure they are numeric now and the structure looks right
+glimpse(fips_codes_numeric)
+
+
+
+```
+
+
+### Step 3 
+
+The FEMA Disaster Declarations Summaries dataset was imported using the fread() function from the data.table package to handle the large file size. The resulting data.table was then converted to a lazy data table using lazy_dt() with immutable = FALSE to enable data manipulation while ensuring the ability to update columns later.
+
+```{r Q3}
+
+## 3)	Read in the “DisasterDeclarationsSummaries.csv” files using fread() from the data.table package, then convert to a lazy data table object using the lazy_dt() function with the immutable argument set to FALSE. This file contains the counties and dates of federal disaster declarations.  It was downloaded from https://www.fema.gov/openfema-data-page/disaster-declarations-summaries-v2, in case you want to use it for your final project.
+
+#read in csv from local filepath and set immutable to false
+disaster_data <- 
+  fread("C:/R/DisasterDeclarationsSummaries.csv") %>% 
+  lazy_dt(immutable = FALSE)
+
+#take a look at structure
+glimpse(disaster_data)
+
+
+
+```
+
+
+### Step 4 
+
+To focus the analysis on disasters most likely to affect surface water conditions in the Gulf Coast region, the FEMA disaster dataset was filtered to include only incidents classified as Flood, Hurricane, Severe Storm, Tropical Storm, or Typhoon. The geographic scope was further restricted to five Gulf Coast states: Texas, Louisiana, Mississippi, Alabama, and Florida. County names in the declaredCountyArea variable were cleaned by removing parentheses around the words "County" and "Parish" while retaining the county names. 
+
+```{r Q4}
+
+## 4)	Filter the disaster data to Flood, Hurricane, Severe Storm, Tropical Storm, and Typhoon incident types. Also filter to disasters declared in Texas, Louisiana, Mississippi, Alabama, and Florida (the Gulf Coast states). Remove the parentheses around the words “County” and “Parish” in the declaredCountyArea variable, but keep the words themselves.
+
+# 1 filtering to selected incidentTypes,
+
+# 2 filtering to states we want-- TX, LA, MS, AL, FL
+
+# 3 clean up the declaredCountyArea column to remove the parentheses
+
+
+#Filter and clean the disaster data
+disaster_filtered <- 
+  disaster_data %>%
+  filter(
+    incidentType %in% c("Flood", "Hurricane", "Severe Storm", "Tropical Storm", "Typhoon"),
+    state %in% c("TX", "LA", "MS", "AL", "FL")
+  ) %>%
+  mutate(
+    declaredCountyArea = str_replace_all(declaredCountyArea, "\\((County|Parish)\\)", "\\1")
+  )
+
+
+#head(disaster_filtered)
+
+```
+
+
+
+### Step 5 
+
+Metadata for water quality monitoring locations were obtained from the U.S. Geological Survey’s Water Quality Portal in tab-separated format. The dataset contains geographic and descriptive information for monitoring stations throughout the U.S. nationwide, including station coordinates, monitoring location type, and associated state and county codes. 
+
+```{r Q5, warning=FALSE}
+
+### 5)	Read in the "station.tsv" file using fread(). This file contains the location metadata for the water quality measurements we will read in below. It was downloaded from https://www.waterqualitydata.us/, in case you want to use it for your final project.
+
+
+#read station metadata using fread
+station_data <- fread("C:/R/station.tsv")
+
+#look at structure
+glimpse(station_data)
+
+
+```
+
+###Step 6
+
+Monitoring station metadata were joined to the modified FIPS dataset to associate each station with its corresponding county and state name. Since the station.tsv file listed StateCode and CountyCode as numeric identifiers, the FIPS dataset with numeric versions of these codes (state_code_numeric, county_code_numeric) was used for the join. The resulting dataset was then filtered to retain only stations located in the five Gulf Coast states, and monitoring types that included "surface" in the description to focus on surface water information. 
+
+```{r Q6again}
+
+### 6)	Join this file to the modified fips_codes dataset from Step 2. Next, filter to locations in Texas, Louisiana, Mississippi, Alabama, and Florida, and filter to locations where MonitoringLocationType includes the words “Surface” or “surface”.
+
+
+#################################################################################
+#troubleshooting numeric issue in Step 6
+
+#Use fips_codes_numeric (from Step 2) so numeric join keys match
+station_joined <- 
+  station_data %>%
+  mutate(
+    StateCode = as.numeric(StateCode),
+    CountyCode = as.numeric(CountyCode)
+  ) %>%
+  left_join(fips_codes_numeric, by = c("StateCode" = "state_code_numeric", 
+                                       "CountyCode" = "county_code_numeric")) %>%
+  filter(
+    state %in% c("TX", "LA", "MS", "AL", "FL"),
+    str_detect(MonitoringLocationTypeName, regex("surface", ignore_case = TRUE))
+  ) %>%
+  mutate(
+    county = str_remove(county, " Parish| County") %>% str_trim()
+  )
+
+
+#check it out to make sure it worked and we have state and county vars
+station_joined %>% select(StateCode, CountyCode, state, county) %>% head()
+
+
+
+
+```
+
+
+
+### Step 7
+
+Surface water chemistry measurements were obtained from the U.S. Geological Survey’s Water Quality Portal. The file resultphyschem.tsv, which contains pollutant concentration measurements across multiple decades, was read using the read_delim_arrow() function with tab (\t) as the delimiter. To reduce memory burden, the file was initially loaded as an Arrow-backed dataset and then converted into an in-memory tibble using collect(). Only a subset of relevant columns was retained: a measure of concentration, corresponding units, the sampling date, monitor location, name of the measured chemical name, and the medium of the sample.
+
+
+```{r Q7, cache = TRUE}
+
+## 7)	Read in the resultphyschem.tsv file using read_delim_arrow() function with the delim argument set to ”\t”. This file contains the actual water measurements. It was downloaded from https://www.waterqualitydata.us/, in case you want to use it for your final project. It is a very large file, which is why we’re using arrow; your available RAM may be too small to hold the full file in memory. Select the columns ResultMeasureValue, `ResultMeasure/MeasureUnitCode`, ActivityStartDate, MonitoringLocationIdentifier, CharacteristicName, ActivityMediaSubdivisionName.
+
+#read in large resultphyschem.tsv file using arrow
+result_physchem <- 
+  read_delim_arrow(
+    file = "C:/R/resultphyschem.tsv",
+    delim = "\t",
+    as_data_frame = FALSE #this keeps it as Arrow Table or Dataset
+  ) %>%
+  dplyr::select(
+    ResultMeasureValue,
+    `ResultMeasure/MeasureUnitCode`,
+    ActivityStartDate,
+    MonitoringLocationIdentifier,
+    CharacteristicName,
+    ActivityMediaSubdivisionName,
+
+  )  %>%
+  collect()
+
+glimpse(result_physchem)
+
+
+
+```
+
+
+
+### Step 8
+
+Water quality measurements were linked to station metadata by joining on the monitor location variable, which identifies each unique sampling location. The station metadata was converted to a regular tibble to ensure compatabilty with other datasets. An inner join was used to retain only those chemical measurements that could be matched to known surface water monitoring locations within the Gulf Coast region. This join step allowed spatial context (state and county) to be attached to each water chemistry record.
+
+```{r Q8, cache=TRUE}
+
+### 8)	Join the water location metadata to the water measurement data by the MonitoringLocationIdentifier variable that exists in both datasets.
+
+
+#convert station metadata to tibble if it isn’t already
+station_df <- station_joined %>% as_tibble()
+
+#inner join using base R objects (not Arrow)
+water_joined <- 
+  result_physchem %>%
+  inner_join(station_df, by = "MonitoringLocationIdentifier")
+
+
+#let's look at it 
+glimpse(water_joined)
+
+
+
+```
+
+
+
+### Step 9 
+
+The joined dataset of water chemistry measurements and station metadata was filtered to retain only records with valid units of concentration and that represented surface water samples. Specifically, only measurements with units in micrograms per liter (µg/L), milligrams per liter (mg/L), nanograms per liter (ng/L), picograms per liter (pg/L), and similar unit variations were included. In addition, only observations where the medium of the sample was "surface water" were included to ensure the analysis focused only on quantifiable pollutant concentrations in surface water samples.
+
+```{r Q9again, cache=TRUE}
+
+#### 9)	Filter this joined object to those measurements with `ResultMeasure/MeasureUnitCode` %in% c("mg/l","ug/l","ng/l","pg/l","mg/L","ug/L","ng/L","pg/L","ug/g","mg/kg") &  ActivityMediaSubdivisionName == "Surface Water"). 
+
+
+#filter for valid units and Surface Water
+water_filtered <- 
+  water_joined %>%
+  filter(
+    `ResultMeasure/MeasureUnitCode` %in% c("mg/l", "ug/l", "ng/l", "pg/l", 
+                                           "mg/L", "ug/L", "ng/L", "pg/L", 
+                                           "ug/g", "mg/kg") &
+    ActivityMediaSubdivisionName == "Surface Water"
+  ) %>%
+  collect()
+
+#look at it, make sure state code and county code are there too 
+glimpse(water_filtered)
+
+
+```
+
+
+
+### Step 10
+
+The column "ResultMeasureValue", which stores pollutant concentrations from the Water Quality Portal datasets, sometimes included a leading “<” symbol to indicate values below detection limits. To prepare the variable for quantitative analysis, these symbols were removed, and the resulting strings were converted to numeric values. A new variable, log10_concentration, was calculated as the base-10 logarithm of each concentration value in order to normalize the distribution of concentration measurements and reduce the influence of extreme values in later analysis.
+
+```{r Q10, cache=TRUE}
+
+### 10)	The ResultMeasuredValue column in this object contains the actual water measurements. Remove the “<” character where it appears in this variable. Then calculate the log10 concentration.
+
+#clean value and compute log10 concentration
+water_cleaned <- 
+  water_filtered %>%
+  mutate(
+    ResultMeasureValue = str_remove(ResultMeasureValue, "<"),
+    ResultMeasureValue = as.numeric(ResultMeasureValue),
+    log10_concentration = log10(ResultMeasureValue)
+  )
+
+
+```
+
+
+
+### Step 11
+
+The cleaned water chemistry data were joined to disaster declaration records by state and county to enable temporal comparisons between water quality and disaster events. Prior to the join, both datasets were set as standard tibbles in the memory to ensure compatibility with Arrow objects as they are different from R dataframes.
+
+After renaming certain columns and cleaning, the datasets were joined using left_join() on state and county. The result was then converted into a data.table object. The resulting water_disaster_dt object contained over 40,000 water samples with matched disaster incident dates, enabling temporal classification of water quality before and after declared disaster events.
+
+```{r Q11, cache=TRUE}
+
+
+### 11)	Join the result to the disaster declaration date by state and county. Convert the result to a data.table. Trust me that the operations in the steps above have executed much faster than they would have using standard R/tidyverse functions because we have used arrow and data.table.
+
+
+
+###troubleshooting
+#step1:ccollect earlier in the pipeline (after Arrow + filter)
+water_filtered_df <- water_filtered %>% collect()
+
+#step 2: clean and mutate 
+water_cleaned_df <- 
+  water_filtered_df %>%
+  mutate(
+    ResultMeasureValue = str_remove(ResultMeasureValue, "<"),
+    ResultMeasureValue = as.numeric(ResultMeasureValue),
+    log10_concentration = log10(ResultMeasureValue)
+  )
+
+
+##before joining, we have to make diasaster_filtered a tibble
+disaster_filtered_df <- disaster_filtered %>% as_tibble()
+
+#rename columns, make sure county just says the name and not "county" after the proper name
+disaster_filtered_df <- 
+  disaster_filtered %>%
+  mutate(
+    county = str_remove(declaredCountyArea, " County| Parish") %>% str_trim()
+  ) %>%
+  as_tibble()
+
+
+#look at disaster_filtered_df
+head(disaster_filtered_df)
+
+
+#step 3: Now we can join with disaster data
+water_disaster_dt <- 
+  water_cleaned_df %>%
+  left_join(disaster_filtered_df, by = c("state", "county")) %>%
+  as.data.table()
+
+#40,754
+#colnames(disaster_filtered_df)
+
+```
+
+
+
+
+
+
+### Step 12
+
+To enable temporal comparisons of water quality relative to disaster events, each observation was categorized as occurring either in the year before or after the disaster. The variable indicating the date of sampling was compared against the beginning date of the incident and the end date of the incident. Observations occurring within one year prior to the disaster start date were labeled as "Time 1", while those within one year after the disaster end date were labeled as "Time 2". All other records were excluded from analysis.
+
+Prior to classification, all relevant date fields were converted to Date class to ensure compatibility. A new categorical variable, "PrePost", was created to store the temporal classification. Observations without a valid classification were removed.
+
+
+```{r Q12, cache=TRUE}
+
+### 12)	Use the following code snippet to create a new variable that categorizes water measurements as being from the year prior to the disaster declaration, the year following the disaster declaration, or neither, then remove the measurements that are neither:
+#	 mutate(PrePost = case_when(ActivityStartDate > incidentBeginDate-365 & ActivityStartDate < incidentBeginDate ~ "Time 1", 
+#ActivityStartDate < incidentEndDate+365 & ActivityStartDate > incidentEndDate ~ "Time 2",
+#.default = NA) %>% factor()) %>%  filter(!is.na(PrePost)) 
+
+
+
+#make sure everything is a date
+water_disaster_dt[, ActivityStartDate := as.Date(ActivityStartDate)]
+water_disaster_dt[, incidentBeginDate := as.Date(incidentBeginDate)]
+water_disaster_dt[, incidentEndDate := as.Date(incidentEndDate)]
+
+############################################################################
+
+
+#categorize as Time 1/Time 2 and filter to only valid entries
+
+water_disaster_tidy <- 
+  water_disaster_dt %>%
+  as_tibble() %>%
+  mutate(
+    PrePost = case_when(
+      ActivityStartDate > incidentBeginDate - 365 & ActivityStartDate < incidentBeginDate ~ "Time 1",
+      ActivityStartDate < incidentEndDate + 365 & ActivityStartDate > incidentEndDate ~ "Time 2",
+      .default = NA_character_
+    ) %>% factor()
+  ) %>%
+  filter(!is.na(PrePost))
+
+
+
+```
+
+
+
+
+### Step 13
+
+To prepare for statistical comparisons, the dataset was grouped by chemical name, state, county, and temporal classification ("PrePost"). Within each group, the median of the log-transformed concentration (log10_concentration) was calculated, allowing for a robust summary of pollutant levels before and after each disaster event at the county level, and minimizing the influence of extreme values or skewed distributions. The resulting dataset included one row per chemical-state-county-time combination, with a single median log concentration per group. 
+
+```{r Q13, cache=TRUE}
+
+### 13)	Group by chemical (CharacteristicName), state, county, and PrePost.  Calculate the median concentration within each group, then ungroup.
+
+median_concentration <- 
+  water_disaster_tidy %>%
+  group_by(CharacteristicName, state, county, PrePost) %>% #grouping by chemical, state, county, and prepost
+  summarize(
+    median_log10_concentration = median(log10_concentration, na.rm = TRUE),
+    .groups = "drop"  #this should ungroup automatically
+  )
+
+
+
+```
+
+
+### Step 14
+
+To ensure a valid comparison of water quality before and after disaster declarations, the dataset was filtered to include only those county-chemical combinations with measurements observed in both time periods ("Time 1" and "Time 2"). This was done by grouping by chemcial name, state, and county, and retaining only those groups where "PrePost" included more than one distinct value, meaning measurements were observed in both time periods. 
+
+This filtering reduced the dataset to only those locations with paired pre- and post-disaster measurements, enabling within-group comparisons of pollutant concentration changes across time.
+
+```{r Q14, cache=TRUE}
+
+### 14)	Group by chemical, state, and county, then filter by n_distinct(PrePost)>1 in each group, then ungroup. In other words, only retain those groups that have measurements both before and after the disaster declaration.
+
+
+water_disaster_tidy_filtered <- 
+  water_disaster_tidy %>%
+  group_by(CharacteristicName, state, county) %>%
+  filter(n_distinct(PrePost) > 1) %>%
+  ungroup()
+
+
+water_disaster_tidy_filtered %>%
+  count(CharacteristicName, state, county) %>%
+  arrange(desc(n))
+
+
+
+
+```
+
+
+
+### Step 15
+
+In order to improve the generalizability of the statistical models, only chemicals measured in at least two distinct geographic locations were retained. Sincw multiple states can have counties with the same name, a new variable was created by concatenating state and county names. The dataset was then grouped by chemical, and filtered to include only those chemicals present in at least two unique state–county combinations.
+
+```{r Q15, cache=TRUE}
+
+# 15)	Group by chemical, then, using n_distinct() again, filter to those chemicals that have at least two distinct state+counties combinations in each group. Note that states can share county names, so you probably want to combine state and county into a single variable.
+
+
+water_disaster_ready <- 
+  water_disaster_tidy_filtered %>%
+  mutate(location_id = paste(state, county, sep = "_")) %>%      #this puts county and state into 1 var
+  group_by(CharacteristicName) %>%        #groups by chemical name
+  filter(n_distinct(location_id) >= 2) %>%  ##they have to show up in at least 2 distinct counties
+  ungroup()
+
+
+#check that it actually worked
+water_disaster_ready %>%
+  count(CharacteristicName, sort = TRUE) %>%
+  head(10)
+
+
+```
+
+
+
+### Step 16 
+
+Assessment of whether pollutant concentrations changed significantly following disaster declarations, linear models were fitted separately for each chemical. The dependent variable was the median log10-transformed concentration, calculated by chemical, state, county, and "PrePost" classification. Each model regressed this outcome on the PrePost indicator while adjusting for location using a combined state and county location.
+
+Models were implemented using group_modify() to apply a linear model to each chemical group. Confidence intervals and p-values were extracted, and models were filtered to retain only the estimated coefficient for "Time 2" (post-disaster) to evaluate change. **Table 1** includes the results of this linear model. 
+
+``` {r Q16}
+
+### 16)	Still grouping by chemical, use group_modify to run a linear model for each chemical that regresses the median log10 conentration against PrePost, adjusting for state+county. Display the full list of results. There should be 24 chemicals represented. Which chemicals’ concentrations change significantly from before to after the disaster declaration? Do they increase or decrease?
+
+
+
+# 1) calculate medians before modelling
+medians <- water_disaster_ready %>%
+  group_by(CharacteristicName, PrePost, state, county) %>%
+  summarize(median_log10_concentration = median(log10_concentration, na.rm = TRUE), .groups = "drop") %>%
+  mutate(location_id = paste(state, county, sep = "_"))
+
+
+# 2) now we will run models by chemical 
+
+model_results <- medians %>%
+  group_by(CharacteristicName) %>%
+  group_modify(~ {
+    mod <- lm(median_log10_concentration ~ PrePost + location_id, data = .x)
+    broom::tidy(mod, conf.int = TRUE)
+  }) %>%
+  ungroup()
+
+
+
+model_results <- medians %>%
+  group_by(CharacteristicName) %>%
+  group_modify(~ {
+    mod <- lm(median_log10_concentration ~ PrePost + location_id, data = .x)
+    broom::tidy(mod, conf.int = TRUE)
+  }) %>%
+  ungroup()
+
+
+# 3) now we can filter for disaster timing 
+#(should get 24)
+
+prepost_effects <- model_results %>%
+  filter(term == "PrePostTime 2") %>%
+  arrange(p.value)
+
+
+prepost_effects %>%
+  mutate(direction = ifelse(estimate > 0, "increase", "decrease")) %>%
+  select(
+    CharacteristicName,
+    estimate,
+    conf.low,
+    conf.high,
+    p.value,
+    direction
+  ) %>%
+  arrange(p.value) %>%
+  head(10)
+
+
+```
+
+
+## Results
+
+```{r Q16Table}
+
+
+
+prepost_effects %>%
+  mutate(direction = ifelse(estimate > 0, "increase", "decrease")) %>%
+  select(
+    CharacteristicName,
+    estimate,
+    conf.low,
+    conf.high,
+    p.value,
+    direction
+  ) %>%
+  arrange(p.value) %>%
+  kable(
+    format = "html",
+    digits = 3,
+    caption = "Table 1. Change in Chemical Concentration After Disaster Declaration (Time 2 vs. Time 1)"
+  ) %>%
+  kable_styling(
+    bootstrap_options = c("striped", "hover", "condensed", "responsive"),
+    full_width = FALSE
+  )
+
+
+
+
+
+
+
+```
+
+
+
+**Table 1** displays results from linear models estimating the change in median log10-transformed concentrations of 24 water quality indicators in the year after disaster declarations, compared to the year before, adjusting for location (state and county). 
+
+Sulfate was the only chemical to show a statistically significant post-disaster change (p = 0.015), with a 0.128 log10 unit increase, corresponding to an approximate 34% (10^0.128 = 1.34) rise in concentration. This suggests sulfate levels may be sensitive to disaster-related runoff or infrastructure disruption.
+
+Other chemicals showed directional changes, though these were not statistically significant. Organic carbon decreased slightly after the disaster (estimate = –0.076 log10 units). When exponentiated (10^–0.076=≈ 0.83), this corresponds to a 17% decrease in median organic carbon concentration post-disaster, although the confidence interval included zero. Orthophosphate showed a small increase (estimate = 0.069 log10 units), translating to a 17% rise in median concentration (10^0.069 ≈ 1.17). Ammonia also increased (estimate = 0.105 log10 units), corresponding to a 28% increase in median concentration (10^0.105 ≈ 1.28).
+
+Although none of these changes were statistically significant, the positive shifts in orthophosphate and ammonia may reflect nutrient enrichment in surface waters following disaster events.,
+
+Among the metals measured, arsenic, cadmium, chromium, lead, and copper all exhibited modest post-disaster increases, though none were statistically significant. For example, cadmium increased by 0.122 log10 units but had a very wide confidence interval (95% CI: –1.423, 1.666), suggesting considerable uncertainty. Iron decreased slightly post-disaster (–0.189 log10 units), and nitrate/nitrite also showed a small, non-significant decrease (–0.190 log10 units), which may reflect stormwater dilution or changes in agricultural activity following disasters.
+
+Overall, while only sulfate had a statistically significant increase, the general trend across multiple nutrients and metals suggests potential post-disaster water quality impacts that qill require better monitoring in the future. The wide confidence intervals for many chemicals also point to substantial variability across locations and events, centering the idea that surface water pollution can vary widely in a small area. 
+
+
+
+## Discussion 
+
+This analysis evaluated changes in surface water chemical concentrations in the year following federally declared disasters across five Gulf Coast states—Texas, Louisiana, Mississippi, Alabama, and Florida—focusing on disasters classified as hurricanes, tropical storms, floods, severe storms, and typhoons. he datasets were restricted to surface water measurements collected within one year before or after each disaster, and chemicals were included in the final analysis only if they were observed in at least two counties and had measurements in both pre- and post-disaster periods. By integrating national water quality monitoring data with FEMA disaster declaration records, the study evaluated whether surface water quality indicators exhibited systematic shifts in the year following tropical cyclones, floods, or hurricanes.
+
+Of the 24 chemicals included in the final model, sulfate showed a statistically significant increase in median concentration post-disaster (Beta = 0.128 log10 units, p = 0.015, 95% CI: 0.090 to 0.167), which corresponds to approximately a 34% rise in concentration, suggesting a meaningful increase in sulfate levels following disaster events, potentially due to runoff from agricultural sites or construction/infrastructure damage. While other chemicals did not exhibit statistically significant changes, several showed directional trends, such as ammonia and orthophosphate both increasing slightly post-disaster, also indicating agricultural runoff. These patterns may reflect increased nutrient loading from agricultural areas and petrochemical sites primarily following storm-driven flooding, though the confidence intervals for these effects included zero, indicating uncertainty (Elliot et al., 2024).
+
+These findings align with prior research showing that tropical cyclones increase risks for waterborne contamination and illness, as not only chemical hazards but pathogen hazards (such as Legionella or E. coli) can co-occur following extreme precipitation and storms (Lynch and Shaman, 2023). 
+
+Some limitations of this analysis include reliance on available monitoring data, which may be unevenly reported across counties or across multiple years. Additionally, the classification of pre- and post-disaster timing was based on standardized windows before and after disaster dates, which may not fully reflect local exposure or lag times. A person can have high exposure to natural arsenic in their water prior to a disaster, and the contamination of their water source following a storm may worsen the arsenic level, but this makes dose-response and temporal associations more challenging. Future research should combine chemical concentration analyses with local health outcome or hospital visit data to analyze the disease burden or exposure burden on a community after a disaster. 
+
+As extreme weather events become more frequent and intense with climate change, the risk of storm-driven water contamination is expected to rise (U.N. Environment Programme, 2024). These findings highlight the need for improved disaster surveillance, chemical spill transparency, and resilient infrastructure in Gulf Coast regions (Elliot et al., 2024) Integrating environmental, public health, and disaster preparedness data will be critical to protecting vulnerable populations in the face of increasingly destructive and costly climate hazards.
+
+## References 
+
+Elliot, Boyer, & Brown. (2024, October 9). When hurricanes hit, flooded industrial sites and chemical releases are a silent, toxic threat. PBS News. https://www.pbs.org/newshour/nation/when-hurricanes-hit-flooded-industrial-sites-and-chemical-releases-are-a-silent-toxic-threat
+
+Lynch, V. D., & Shaman, J. (2023). Waterborne Infectious Diseases Associated with Exposure to Tropical Cyclonic Storms, United States, 1996–2018. Emerging Infectious Diseases, 29(8), 1548–1558. https://doi.org/10.3201/eid2908.221906
+
+Mondal, M., Mukherjee, A., Kumar, P., Ismaeel, N. M., & Das, K. (2024). A process-based impact of tropical cyclone and hurricane on surface water-groundwater interaction and contaminant mobilization of coastal aquifers. Progress in Disaster Science, 22, 100318. https://doi.org/10.1016/j.pdisas.2024.100318
+
+Smith. (2023, January 10). 2022 U.S. billion-dollar weather and climate disasters in historical context | NOAA Climate.gov. https://www.climate.gov/news-features/blogs/beyond-data/2022-us-billion-dollar-weather-and-climate-disasters-historical
+
+U.N. Environment Programme. (2024). Climate Change and Water-Related Disasters | UNEP - UN Environment Programme. https://www.unep.org/topics/fresh-water/disasters-and-climate-change/climate-change-and-water-related-disasters
+

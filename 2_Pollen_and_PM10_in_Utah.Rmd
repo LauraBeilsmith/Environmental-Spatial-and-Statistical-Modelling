@@ -1,0 +1,934 @@
+---
+title: "Lab Assignment 2"
+output: html_document
+---
+
+# Pollen and PM10 in Utah
+#### Laura Beilsmith
+#### University of Colorado School of Public Health
+#### February 24, 2025
+
+
+## Abstract
+Pollen exposure and particulate matter with a diameter of less than 10 micrometers (PM10) are major environmental factors affecting respiratory health, and climate change will only continue to exacerbate their impacts. This study examines the relationship between daily median pollen concentrations and PM10 levels in Utah using data from four PollenSense monitors and nearby U.S. EPA Air Quality System PM10 monitors in 2020. Spatial analysis was conducted to determine the distances between pollen and PM10 monitors. Linear regression models were used to assess species-specific associations, adjusting for seasonal and spatial factors.  
+
+Results indicate that several pollen species, including Poaceae (0.798, 95% CI: 0.427 to 1.168, p < 0.001), Cupressaceae (0.647, 95% CI: 0.232 to 1.062, p = 0.0023), and Populus (0.3399, 95% CI: 0.1044 to 0.5754, p = 0.0047), exhibited significant positive associations with PM10 levels. Total pollen concentration was also strongly associated with PM10 (4.4665, 95% CI: 1.3077 to 7.6233, p = 0.0056). However, several species, including Acer, Alnus, and Fraxinus, showed weak or non-significant associations.  
+
+These findings suggest that PM10 may contribute to increased pollen levels for select species, potentially amplifying allergic disease risks. Future studies should explore meteorological influences and regional variations to refine public health interventions and climate adaptation strategies aimed at mitigating airborne allergen exposure.
+
+
+
+
+## Introduction 
+Pollen exposure is a significant environmental factor influencing respiratory health, particularly for individuals with allergic conditions such as asthma and allergic rhinitis. Pollen grains, released by plants during their reproductive cycles, are small airborne particles that can trigger immune responses when inhaled, leading to a range of allergic symptoms including nasal congestion, eye irritation, and respiratory distress (Department of Health and Human Services [HHS], 2024). The burden of pollen-related allergic diseases is increasing, with climate change playing a critical role in shaping pollen exposure patterns. Rising global temperatures, shifting precipitation patterns, and increasing atmospheric carbon dioxide levels are contributing to longer pollen seasons, higher pollen concentrations, and changes in the geographic distribution of allergenic plant species (Choi et al, 2021).  
+
+In addition to pollen, particulate matter with a diameter of less than 10 micrometers (PM10) is another important environmental factor affecting respiratory health. PM10 originates from sources such as vehicle emissions, industrial activity, and natural processes like wildfires and dust storms. These airborne particulates can penetrate the respiratory system, exacerbating respiratory diseases and interacting with other airborne allergens such as pollen. Studies have suggested that PM10 can alter pollen structure, and facilitate deeper lung penetration, potentially amplifying allergic responses (Choi et al, 2021). Additionally, exposure to air pollutants and pollens may worsen the effects of viral respiratory infections in young children (Choi et al., 2022).   
+
+The relationship between pollen concentrations and PM10 levels remains an area of active research, with evidence suggesting that these environmental factors may be correlated. Increased levels of PM10 may enhance pollen dispersal by altering atmospheric dynamics or by physically interacting with pollen grains. Additionally, both pollen and PM10 are influenced by similar meteorological factors, including temperature, humidity, and wind patterns, making it essential to investigate their potential co-variation in ambient air (HHS, 2024).   
+
+This analysis aims to examine the association between daily median pollen concentrations and PM10 levels, adjusting for seasonal and spatial factors. Specifically, the analysis will evaluate whether changes in PM10 concentrations (the predictor, measured in micrograms per cubic meter) are associated with variations in pollen levels (the outcome, measured in grains per cubic meter) across different species and monitoring locations. Understanding these relationships is crucial for assessing potential public health implications, particularly in the context of climate change and its impact on air quality and allergies and worsening viral respiratory diseases seasonally.  
+
+By using statistical analyses, this analysis contributes to a growing body of literature on environmental exposures and respiratory health, providing insights into how particulate pollution and allergenic pollen may interact in a changing climate. The results of this analysis may help inform public health strategies aimed at mitigating exposure to airborne allergens and improving respiratory health outcomes in vulnerable populations.  
+
+```{r setup, echo=TRUE, message=FALSE, warning=FALSE}
+
+
+#load packages 
+library(tidyverse)
+library(tidyr)
+library(dplyr)
+library(sf)
+library(tmap)
+library(tmaptools)
+library(ggplot2)
+library(lubridate)
+library(RAQSAPI)
+library(ggplot2)
+library(tibble)
+library(knitr)
+library(kableExtra)
+library(broom)
+
+
+
+
+```
+
+## Methods 
+
+#### Study Design and Description of Data Sources 
+
+This study investigates the relationship between species-specific daily pollen concentrations and particulate matter 10 micrometers or less (PM10) concentration in Utah from January of 2020 to December of 2020. Data from PollenSense monitors, which provide real-time pollen data, was used to estimate pollen concentration, and the RAQSAPI package in R was used to obtain PM10 concentration from the U.S. Environmental Protection Agency's Air Quality System (AQS) monitors. Spatial data analyses were conducted using the sf, tmap, and ggplot2 packages in R version 4.4.2, while statistical analyses were performed using tidyverse, broom, and lm(). The analysis focuses on understanding daily trends in pollen and PM10, their geospatial relationships, and whether PM10 concentrations are associated with changes in pollen levels across species and monitoring locations.  
+
+
+
+### Step 1:	
+
+The PollenSense monitor data for 2020 was loaded into R, which contains hourly species-specific pollen counts from 4 monitors in Utah. The dataset includes columns for more than 20 species-specific pollen concentrations as well as a column for total pollen concentration.  
+
+
+```{r Question1}
+
+### 1)	Download the sf object “PollenData_Utah2020.RData” from Canvas and load() it into R. It contains hourly species-specific pollen counts and total pollen counts from four automated PollenSense monitors located south of Salt Lake City, Utah during the year 2020.  The dataset contains columns for 20+ species-specific concentrations as well as a column for total pollen concentration (the “Pollen” column).
+
+
+#set wd
+setwd("C:/R")
+
+#load R data
+load("PollenData_Utah2020.RData")
+
+#inspect structure 
+#str(PollenMonitors)
+
+
+
+```
+
+
+
+### Step 2:	
+
+In order to visualize the seasonality and temporal patterns of pollen counts, a time series plot of total pollen concentrations was generated for each PollenSense monitor over the course of 2020. This visualization (using a facet grid to easily visualize all monitors at once) helps identify seasonal pollen patterns and peak pollen periods across monitoring locations.The x-axis of each plot is January through December of 2020, and the y-axis is total pollen counts taken at that monitor.  
+
+```{r Question2}
+
+### 2)	Plot a time series of total Pollen counts (the “Pollen” column) for each PollenSense monitor over the whole year.
+
+#startingat column formatting for date recognition (each one is 2020) 
+PollenMonitors <- PollenMonitors %>%
+  mutate(Date = as.Date(StartingAt))
+
+#time series plot of total pollen counts for each monitor
+ggplot(PollenMonitors, aes(x = Date, y = Pollen, color = factor(`Monitor ID`))) +
+  geom_line(alpha = 0.8) + 
+  facet_wrap(~ `Monitor ID`, scales = "free_y") +  
+  labs(
+    title = "Fig 1. Total Pollen Counts Over Time by PollenSense Monitor",
+    x = "Date",
+    y = "Pollen Concentration",
+    color = "Monitor ID"
+  ) +
+  theme_minimal()
+
+```
+
+**Figure 1** shows that peak pollen concentrations across each of the four monitors is between April and July, although there is slight variation between the monitors, likely due to changing environments and changing meteorological conditions of the monitors' locations.   
+
+
+### Step 3: 
+
+To optimize spatial computations, a bounding box was defined around all of the PollenSense monitor locations collectively, incorporating a 5km buffer around each site. This ensures that spatial analyses are performed only in relevant areas, reducing unnecessary computational load and setting spatial limits for the region of interest.  
+
+In order to avoid analyzing redundant spatial data, a single day (2020-06-01) when all four monitors were operating was selected, as the monitors geographical placement does not change throughout the year.   
+
+The dataset is transformed into a spatial object in order to define the boundaries around the pollen monitors, resulting in minimum and maximum coordinates of the study area.   
+
+
+```{r Question3}
+
+### 3)	Determine the bounding box around the PollenSense monitor sites, incorporating a 5km buffer around each site. Note that this operation is much faster if you first filter down to a single day when all four monitors are operating. Filtering down to the minimal unique set of geometries in your dataset before performing spatial operations is an important strategy for handling spatial data that you will use repeatedly throughout the semester.
+
+
+#first filter down to a single day when all 4 monitors are running 
+#6/1/2020
+single_day_monitors <- PollenMonitors %>%
+  filter(as.Date(StartingAt) == "2020-06-01") %>%  
+  distinct(`Monitor ID`, .keep_all = TRUE) #this line ensures we keep the distinct locations 
+
+#convert data to sf object
+pollen_sf <- st_as_sf(single_day_monitors, coords = c("geometry"), crs = 4326)
+
+#5km buffer around each site
+pollen_buffer <- st_buffer(pollen_sf, dist = 5000)  
+
+#calculate bounding box
+pollen_bbox <- st_bbox(pollen_buffer)
+
+pollen_bbox
+
+
+#now we know where everything is in space WITH 5km around the monitors 
+
+
+```
+
+
+
+
+
+### Step 4:
+
+A map of PollenSense monitor locations was generated using tmap, overlaid with an OpenStreetMap (OSM) basemap for geographic context. Monitor ID labels are positioned slightly above each monitor location by adjusting the Y-coordinates of the monitor labels in order to improve readability. The bounding box was expanded by 10 km to improve map visibility.  
+
+
+```{r Question4, fig.width=8, fig.height=6}
+
+
+### 4)	Use tmap to plot the PollenSense monitor locations.  Include an underlying basemap using read_osm() in the tmaptools package.  Display the Monitor IDs on the map.
+
+
+
+#bounding box for poleen_sf this time
+pollen_bbox <- st_bbox(pollen_sf)  
+
+#we'll expand the bounding box so that we can actually see each location
+expanded_bbox <- st_bbox(pollen_sf) %>% st_as_sfc() %>% st_buffer(10000) %>% st_bbox()
+
+#OpenStreetMap basemap
+osm_basemap_exp <- read_osm(expanded_bbox, type = "osm")
+
+
+
+tmap_mode("plot")  #this sets it as a static map, "view" is interactive
+
+
+#so in order to make sure we can actually see the labels, 
+#we will extract coordinates and convert to dataframe to modify them
+label_coords <- as.data.frame(st_coordinates(pollen_sf))  #df
+label_coords$Y <- label_coords$Y + 0.01  #this moves the labels above the dots
+
+#creation of sf object for labels with modified coordinates
+pollen_labels_sf <- st_as_sf(
+  data.frame(MonitorID = pollen_sf$`Monitor ID`, X = label_coords$X, Y = label_coords$Y),
+  coords = c("X", "Y"), 
+  crs = st_crs(pollen_sf)  #crs check same as pollen sf
+)
+
+#now create the map:
+pollen_static_map <- 
+  tm_shape(osm_basemap_exp) +  
+  tm_rgb() +  # Render OSM tiles
+  tm_shape(pollen_sf) +  
+  tm_dots(col = "black", size = 0.5) +  
+  tm_shape(pollen_labels_sf) +  
+  tm_text("MonitorID", size = 0.9, col = "black") +  
+  tm_layout(
+    title = "Figure 2. Pollen Monitor Locations in Utah",
+    title.position = c("center", "top"),
+    component.autoscale = FALSE  #don't allow it to rescale 
+  )
+
+pollen_static_map  
+
+
+```
+
+
+**Figure 2** provides a visualization of the locations of each of the four pollen monitors, which will be used to approximate and visualize the distances between pollen and PM10 monitors later in the analysis.    
+
+
+### Step 5	
+
+The dataset originally stored pollen concentration measurements in a wide format, with each species represented as a separate column. To facilitate analysis, the data was reshaped to a long format, where species names were stored in a single column and their respective concentrations in another column. This will allow for species-wise pollen concentration analyses later in the analysis.  
+
+This restructuring allows for efficient filtering, grouping, and visualization of pollen concentrations across species. The pivot_longer() function was used to achieve this transformation, and the geometry of the datatset was removed and reattached to prevent conflicts while pivoting the data orientation.   
+
+
+```{r Question5}
+
+### 5)	Flip the species-specific pollen concentration columns in the PollenSense hourly sf object from wide to long format. Include total pollen (“Pollen”) as a species.
+
+#reshape pollen data
+
+# Separate geometry before reshaping
+pollen_sf_no_geom <- st_drop_geometry(PollenMonitors)  # Remove geometry temporarily
+
+# Identify only numeric columns (pollen concentrations)
+species_columns <- pollen_sf_no_geom %>%
+  dplyr::select(where(is.numeric)) %>%
+  names()
+
+# Reshape the data to long format
+pollen_long <- pollen_sf_no_geom %>%
+  pivot_longer(
+    cols = all_of(species_columns),  # Select only numeric species columns
+    names_to = "Species",  # Column for species names
+    values_to = "Concentration"  # Column for concentration values
+  )
+
+# Reattach geometry
+pollen_long <- left_join(pollen_long, pollen_sf %>% dplyr::select(`Monitor ID`, geometry), by = "Monitor ID")
+
+# Print the first few rows
+head(pollen_long)
+```
+
+
+
+
+
+
+### Step 6	
+
+To examine the seasonal distribution of pollen levels across different species and monitors, a facet grid of boxplots was generated. The x-axis represents months (1-12), while the y-axis represents pollen concentration on a log10 scale. Each species is displayed in a separate row and each monitor in a separate column to facilitate species-wise and location-wise comparisons.  
+
+In order to create this plot, the dataset was modified to include a month column extracted from the timestamp column, and any pollen concentrations equal to zero were remvoed as kog-transformed data cannot contain zeroes.  
+
+
+```{r boxplotQ6, fig.width=20, fig.height=30}
+
+### 6)	With ggplot, create a facet_grid() of panels (species in rows, Monitor ID in columns), each of which displays a boxplot of pollen concentration by month (1-12 or Jan-Dec). Plot the pollen concentration on the log10 scale. This may be a very large plot. Make sure your axes and facet labels are legible.
+
+
+#get months as.numeric 1-12
+pollen_long <- pollen_long %>%
+  mutate(month = as.numeric(format(as.Date(StartingAt), "%m")))
+
+#remove any zero values (log10 can't handle them)
+pollen_long_filtered <- pollen_long %>%
+  filter(Concentration > 0)
+
+#create the boxplot with facet grid
+ggplot(pollen_long_filtered, aes(x = factor(month, levels=1:12), y = log10(Concentration))) +
+  geom_boxplot(outlier.shape = NA) +  #avoids extreme outliers cluttering the plot
+  facet_grid(Species ~ `Monitor ID`) +  #facet by Species & Monitor ID
+  labs(
+    x = "Month (Jan [1] - Dec [12])",
+    y = "Log10 Pollen Concentration",
+    title = "Fig 3. Boxplot of Pollen Concentration by Month and Species"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(size = 24, face = "bold", hjust = 0.5),  #improve title readability
+    strip.text.y = element_text(angle = 45, size = 14, face = "bold"),  
+    strip.text.x = element_text(size = 14),  
+    axis.title.x = element_text(size = 16, face = "bold"),  #increase x-axis label size
+    axis.title.y = element_text(size = 16, face = "bold"),  #increase y-axis label size
+    axis.text.y = element_text(size = 13, angle = 0, face = "bold"), 
+    axis.text.x = element_text(size = 14, angle = 0, hjust = 1, face = "bold")  # Rotate X-axis labels
+  )
+
+
+```
+
+
+**Figure 3** shows the distribution of pollen concentrations across different species and months, stratified by monitor locations (Monitor IDs: 34017, 52236, 54147, and 66123). Each boxplot illustrates the interquartile range (IQR), median, and potential outliers of pollen concentration for a given species at a specific monitor.  
+
+Many species exhibit strong seasonal trends, for example: Acer, Alnus, and Cupressaceae show higher pollen levels in the early months of the year (January–April), while Poaceae and Populus demonstrate higher concentrations mid-year, likely corresponding to each species' respective growing seasons. Most species display right-skewed distributions, with occasional extreme values (outliers) visible above the whiskers of the boxplots. This pattern suggests that while median pollen levels remain relatively low for most of the year, episodic high-pollen events contribute to extreme values. Certain species, such as Olea and Plantago, have minimal boxplots in some monitors, indicating either low detection levels or limited seasonal presence at these locations. This absence could reflect biological cycles or limitations in monitor detection.  
+
+
+
+### Step 7:	
+
+To further analyze pollen patterns over time, a time series plot was created to visualize daily median pollen concentrations for each species and monitor. The dataset was first grouped by species, monitor ID, and date, and the median daily pollen concentration was computed. Since pollen data are right-skewed, the y-axis was plotted on a log10 scale to improve interpretability of the plot.  
+
+To ensure clarity, each species was displayed in a separate row and each monitor in a separate column. geom_line() was used to draw smoothed time series curves, and missing values were removed to prevent breaks in the visualization.  
+
+
+```{r daily-median-timeseriesQ7, fig.width=20, fig.height=30}
+
+### 7)	Calculate the median daily concentration of each species, and then create a facet_grid() of panels (species in rows, Monitor ID in columns), each of which displays a geom_line() timeseries of the daily median concentration (on the log10 scale).
+
+
+#create a date-only column in pollen_long dataset
+pollen_long <- pollen_long %>%
+  mutate(Date = as.Date(StartingAt))  
+
+#calculate daily median concentration
+pollen_daily_median <- pollen_long %>%
+  group_by(Species, `Monitor ID`, Date) %>%
+  summarize(DailyMedian = median(Concentration, na.rm = TRUE), .groups = "drop")
+#summary(pollen_daily_median$DailyMedian)
+
+#create time series plot
+ggplot(pollen_daily_median, aes(x = Date, y = log10(DailyMedian), color = Species, group = Species)) +
+  geom_line(na.rm = TRUE) +  #time series line plots, removes NAs
+  facet_grid(Species ~ `Monitor ID`) +  #Species in rows, Monitor ID in columns
+  labs(
+    title = "Fig 4. Timeseries Median Daily Pollen Concentration by Species and Monitor (Log10 Scale)",
+    x = "Date",
+    y = "Log10 Median Pollen Concentration"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 14),  #rotate x-axis labels
+    axis.text.y = element_text(size = 13),  #y-axis text size adjustment
+    axis.title.x = element_text(size = 16, face = "bold"),  # Increase x-axis label size
+    axis.title.y = element_text(size = 16, face = "bold"),  # Increase y-axis label size
+    strip.text = element_text(size = 14, face = "bold"),  
+    strip.text.y = element_text(angle = 45, size = 14, face = "bold"),  # Rotate species names diagonally
+    plot.title = element_text(hjust = 0.5, size = 24, face = "bold"),  
+    legend.position = "none"  
+  )
+```
+
+
+**Figure 4** is a time series of the median daily pollen concentration for various species across four PollenSense monitors (Monitor IDs: 34017, 52236, 54147, and 66123) throughout 2020. The log10-transformed y-axis scales pollen concentration values to better visualize differences across species, and the x-axis represents the date. Each row corresponds to a different pollen species, while each column represents a specific monitor location.  
+
+This figure shows species such as Acer, Alnus, and Ambrosia/Iva having distinct spikes in early spring and late summer, aligning with known seasonal pollen emission cycles. In contrast, species like Poaceae and Cupressaceae exhibit more prolonged periods of moderate pollen concentration, indicating a longer active pollen season.  
+
+Species such as Platanus, Pinus, and Olea, exhibit only occasional or very low concentrations throughout the year, suggesting either low ambient presence in this region or that these species are not primary contributors to local airborne pollen levels.  
+
+
+### Step 8:
+
+To examine the relationship between pollen and PM10 concentrations, daily PM10 data for Utah was obtained using the RAQSAPI package in R, which contains data from the U.S. EPA's Air Quality System monitors.  
+
+Since spatial comparisons require matching coordinate reference systems (CRS), the dataset was first converted into an sf object, and any missing latitudes or longitudes were removed. If the PollenSense and PM10 datasets used different CRSs, the PM10 data were transformed to match PollenSense CRS.  
+
+After retrieving the data, PM10 locations were mapped to confirm proximity to PollenSense monitors. Only PM10 monitors near PollenSense monitors were included in later in the analysis.  
+
+
+```{r Question8part1}
+
+### 8)	Using RAQSAPI, load all PM10 data from Utah (stateFIPS=”49”) for 2020, and (if needed) transform the PM10 data CRS to the PollenSense monitor CRS.
+
+
+##1)sign up 
+#this should send an email with a unique key
+# aqs_sign_up(email = "laura.2.beilsmith@cuanschutz.edu")
+
+##set up RAQSAPI credentials
+aqs_credentials(username = "laura.2.beilsmith@cuanschutz.edu", key = "amberwolf16")
+
+##start and end dates
+bdate_formatted <- as.Date("2020-01-01")  
+edate_formatted <- as.Date("2020-12-31")  
+
+##get PM10 Data for Utah (State FIPS = "49") for 2020
+pm10_utah <- aqs_dailysummary_by_state(
+  parameter = "81102",  # PM10 in µg/m³
+  bdate = bdate_formatted,  
+  edate = edate_formatted,  
+  stateFIPS = "49"
+)
+
+#double check it was read in correctly
+#head(pm10_utah)
+
+
+
+```
+
+
+
+
+
+```{r Question8part2}
+
+
+#converting CRS 
+
+
+##1: Convert PM10 Data into an sf Object
+pm10_sf <- pm10_utah %>%
+  filter(!is.na(latitude) & !is.na(longitude)) %>%  # Remove missing lat/lon
+  st_as_sf(coords = c("longitude", "latitude"), crs = 4326)  # Convert to sf (EPSG:4326)
+
+##2: Check CRS of PM10 and pollen  Data
+st_crs(pm10_sf)  # Check PM10 CRS
+st_crs(pollen_sf)  # Check PollenSense CRS
+
+##3: Transform PM10 CRS to Match PollenSense Monitors
+if (st_crs(pm10_sf) != st_crs(pollen_sf)) {
+  pm10_sf <- st_transform(pm10_sf, st_crs(pollen_sf))  # Transform CRS
+}
+
+## Step 4: Confirm CRS Matches
+#st_crs(pm10_sf) == st_crs(pollen_sf)  # Should return TRUE
+
+## View the first few rows of transformed PM10 data
+#head(pm10_sf)
+
+
+
+
+```
+
+
+
+### Step 9:	
+
+To contextualize the spatial relationship between pollen and PM10 monitoring sites, a static map was created displaying both PollenSense and PM10 monitors in Utah. The tmap package was used to overlay the monitor locations on an OpenStreetMap (OSM) basemap. Before plotting, data cleaning steps were implemented to remove missing geometries, ensuring that all monitor locations were accurately represented.  
+
+To distinguish between the two types of monitors, pollen monitor sites were marked with yellow dots, while PM10 monitors were marked with red dots. Additionally, monitor IDs were labeled directly on the map to facilitate visual identification. Labels were positioned slightly above or below their respective points to minimize overlap and enhance readability.  
+
+
+```{r Question9}
+
+### 9)	Add the PM10 monitor sites to the map in Step (4), keeping the PollenSense sites.  Display the PM10 monitor IDs on the map as well.  Note that only a few of the PM10 monitors are located close enough to the PollenSense monitors to appear on the map.  
+
+#make sure we don't have any missing geometries
+pm10_sf <- pm10_sf %>% filter(!st_is_empty(geometry)) 
+pollen_sf <- pollen_sf %>% filter(!st_is_empty(geometry))
+
+##read OSM Basemap Using PollenSense Data Extent
+osm_basemap <- read_osm(st_bbox(pollen_sf), type = "osm")  # Uses PollenSense bounding box
+
+tmap_mode("plot")  # Set tmap to static mode
+
+# Expanded bounding box for proper scaling
+expanded_bbox <- st_bbox(pollen_sf) %>% st_as_sfc() %>% st_buffer(10000) %>% st_bbox()
+
+# Load OSM basemap
+osm_basemap_exp <- read_osm(expanded_bbox, type = "osm")
+
+#coordinates for PollenSense labels
+pollen_label_coords <- as.data.frame(st_coordinates(pollen_sf))  
+pollen_label_coords$Y <- pollen_label_coords$Y + 0.01  # Move labels slightly upward
+
+#new sf object for PollenSense labels
+pollen_labels_sf <- st_as_sf(
+  data.frame(MonitorID = pollen_sf$`Monitor ID`, X = pollen_label_coords$X, Y = pollen_label_coords$Y),
+  coords = c("X", "Y"), 
+  crs = st_crs(pollen_sf)  
+)
+
+#coordinates for PM10 labels so that we can move the labels off of the dots
+pm10_label_coords <- as.data.frame(st_coordinates(pm10_sf))  
+pm10_label_coords$Y <- pm10_label_coords$Y - 0.01  # Move labels slightly downward
+
+#new sf object for PM10 labels
+pm10_labels_sf <- st_as_sf(
+  data.frame(SiteNumber = pm10_sf$site_number, X = pm10_label_coords$X, Y = pm10_label_coords$Y),
+  coords = c("X", "Y"), 
+  crs = st_crs(pm10_sf)  
+)
+
+#static map with PollenSense & PM10 monitors
+monitor_static_map <- 
+  tm_shape(osm_basemap_exp) +  
+  tm_rgb() +  
+  ## Add PollenSense Monitors (Yellow)
+  tm_shape(pollen_sf) +  
+  tm_symbols(col = "yellow", shape = 21, border.col = "black", size = 0.7, alpha = 0.9, legend.show = FALSE) +  
+  ## Add PM10 Monitors (Red)
+  tm_shape(pm10_sf) +  
+  tm_symbols(col = "red", shape = 21, border.col = "black", size = 0.7, alpha = 0.9, legend.show = FALSE) +  
+  ## Add Legends
+  tm_add_legend(type = "symbol", labels = "PollenSense Monitors", col = "yellow", shape = 21) +
+  tm_add_legend(type = "symbol", labels = "PM10 Monitors", col = "red", shape = 21) +
+  ## Add PollenSense Labels (Bold, Shadow for Readability)
+  tm_shape(pollen_labels_sf) +  
+  tm_text("MonitorID", size = 0.8, col = "black", fontface = "bold", shadow = TRUE) +  
+  ## Add PM10 Labels (Bold, Shadow for Readability)
+  tm_shape(pm10_labels_sf) +  
+  tm_text("SiteNumber", size = 0.8, col = "black", fontface = "bold", shadow = TRUE) +  
+  ## Layout Adjustments
+  tm_layout(
+    title = "Fig 5. Pollen & PM10 Monitor Locations in Utah",
+    title.position = c("center", "top"),
+    component.autoscale = FALSE,  
+    legend.position = c("left", "bottom")
+  )
+
+monitor_static_map  #display map
+
+
+
+
+
+```
+
+The final map (**Figure 5**) provides a spatial overview of where pollen and PM10 are monitored in relation to each other. The map also shows that only one PM10 monitor is within a certain distance to the pollen monitors to be displayed on the map without reconfiguring the bounds of the pollen map much wider. The exact distances between all of the pollen and PM10 monitors will be investigated next.   
+
+
+### Step 10:
+
+Before analyzing the relationship between pollen and PM10, it was necessary to determine the dates when all monitors (PollenSense: 4 and PM10: 7) were operational in order to reduce computational time, as all monitors are in static locations throughout the year. This was done by aggregating the data by date and counting the number of unique monitor IDs for each date. The intersection of these valid dates across both datasets provided a single common date: January 10, 2020, which was selected for subsequent spatial analysis.  
+
+Once a common date was identified, the dataset was filtered to retain only the unique monitor locations for that day and deduplicated. This ensured that multiple observations from the same monitor did not bias the distance calculations. The CRS of each single-day dataset was also checked to ensure spatial data functions would work as expected.  
+
+Additionally, the st_distance() function from the sf package was used to compute the pairwise distances (in meters) between each pollen monitor and each PM10 monitor. The result is a distance matrix with one column representing PM10 monitors, one column representing pollen monitors, and a distance column representing the distance between each monitor (**Table 1**).  
+
+
+```{r Question10step1 }
+
+### 10)	Determine the unique set of PollenSense monitor locations (there should be 4) and the unique set of PM10 monitor locations (there should be 7), then calculate the distances between each PM10 monitor and each PollenSense monitor using st_distance().  Again, these operations are much faster if you first subset to a single common day when all monitors are operating.
+
+
+#ensure all the date columns are actually dates
+PollenMonitors_dates <- PollenMonitors %>%
+  mutate(StartingAt = as.Date(StartingAt))  
+
+pm10_sf_dates <- pm10_sf %>%
+  mutate(date_local = as.Date(date_local))
+
+
+#first we'll figure out a date where all monitors are running (PM10: 7, Pollen: 4)
+
+
+#count of unique monitors per date for pollen
+pollen_monitor_counts <- PollenMonitors %>%
+  mutate(StartingAt = as.Date(StartingAt)) %>%
+  group_by(StartingAt) %>%
+  summarise(unique_monitors = n_distinct(`Monitor ID`)) %>%
+  filter(unique_monitors == 4)  #all 4 have to be running
+
+#count unique monitors per date for PM10
+pm10_monitor_counts <- pm10_sf %>%
+  mutate(date_local = as.Date(date_local)) %>%
+  group_by(date_local) %>%
+  summarise(unique_monitors = n_distinct(site_number)) %>%
+  filter(unique_monitors == 7)  #all 7 have to be running
+
+#find dates where all monitors are running in BOTH datasets
+valid_common_dates <- intersect(pollen_monitor_counts$StartingAt, pm10_monitor_counts$date_local)
+
+#first available common date
+common_date <- as.Date(valid_common_dates[1])
+##2020-1-10
+
+print(paste("Common Date Selected:", common_date))
+
+
+```
+
+
+```{r Question10step2}
+
+#subset PollenSense data to only include observations from the common date
+pollen_day_sf <- PollenMonitors %>%
+  filter(StartingAt == common_date) 
+
+#deduplicate pollen_day_sf, keep only one row per monitor
+#since it monitors multiple timestamps per day, we can just keep the first one to make it easier to figure out distances later
+pollen_day_sf <- pollen_day_sf %>%
+  group_by(`Monitor ID`) %>%
+  slice(1) %>%
+  ungroup()
+
+#confirm that the dataset now has only 4 unique monitors
+#nrow(pollen_day_sf)  # Should now be 4
+
+
+#subset PM10 data to only include observations from the common date
+pm10_day_sf <- pm10_sf %>%
+  filter(date_local == common_date)
+
+#remove duplicate PM10 monitors (keep the first occurrence for each site_number)
+pm10_day_sf <- pm10_day_sf %>%
+  group_by(site_number) %>%
+  slice(1) %>%
+  ungroup()
+
+#confirm that there are no duplicate PM10 monitors
+table(pm10_day_sf$site_number)  # Should now contain 7 unique PM10 monitors
+
+
+#confirm the number of monitors in each dataset
+print(paste("Pollen Monitors on", common_date, ":", n_distinct(pollen_day_sf$`Monitor ID`)))
+print(paste("PM10 Monitors on", common_date, ":", n_distinct(pm10_day_sf$site_number)))
+
+
+```
+
+
+```{r Question10step3}
+##Step 3 checking CRS before we figure out distance between monitors
+#st_distance reuqires the two objects to have the same CRS
+
+
+#check CRS for both datasets
+st_crs(pollen_day_sf)  
+st_crs(pm10_day_sf)
+
+if (is.na(st_crs(pollen_day_sf))) {
+  st_crs(pollen_day_sf) <- st_crs(pm10_day_sf)
+}
+
+#transform pollen_day_sf to match PM10
+if (st_crs(pollen_day_sf) != st_crs(pm10_day_sf)) {
+  pollen_day_sf <- st_transform(pollen_day_sf, crs = st_crs(pm10_day_sf))
+}
+
+#check
+st_crs(pollen_day_sf) == st_crs(pm10_day_sf) 
+
+
+
+###calculating distance between each PM10 monitor and each pollen monitor 
+
+#now we can compute the Distance Matrix with st_distance 
+#(Rows = PM10 Monitors, Columns = Pollen Monitors)
+distance_matrix <- st_distance(pm10_day_sf, pollen_day_sf)
+
+#convert to DataFrame for Readability
+distance_df <- as.data.frame(distance_matrix)
+
+#assign Row & Column Names for Clarity
+rownames(distance_df) <- as.character(pm10_day_sf$site_number)  # PM10 Monitor IDs
+colnames(distance_df) <- as.character(pollen_day_sf$`Monitor ID`)  # PollenSense Monitor IDs
+
+#
+print(distance_df)  #should show distances in meters
+
+
+
+
+
+#####make it look nice 
+#convert distance matrix to long format for better readability
+distance_tibble <- distance_df %>%
+  tibble::rownames_to_column(var = "PM10_Monitor") %>%
+  pivot_longer(-PM10_Monitor, names_to = "PollenSense_Monitor", values_to = "Distance_m")
+
+#format the table with a title and labels
+distance_tibble %>%
+  arrange(PM10_Monitor, Distance_m) %>%  
+  kable(caption = "Table 1: Distance Between PM10 and PollenSense Monitors (Meters)", 
+        col.names = c("PM10 Monitor", "PollenSense Monitor", "Distance (m)"), 
+        digits = 2) %>%  # Round to 2 decimal places
+  kable_styling(bootstrap_options = c("striped", "hover", "condensed"), 
+                full_width = FALSE, 
+                position = "center")
+
+```
+
+**Table 1** shows the calculated distances (in meters) between each PollenSense monitor and each PM10 monitoring site. The table is structured such that each row represents a unique pair of PM10 and PollenSense monitors, with corresponding distances calculated using spatial operations.  
+
+The distances in the table vary widely, ranging from approximately 9,000 meters (~9 km) to nearly 190,000 meters (~190 km). Some PM10 monitors, such as 4001, exhibit relatively small distances to multiple PollenSense monitors, indicating their proximity to the pollen monitoring network. In contrast, PM10 monitors like 0007 and 1003 have consistently larger distances from all PollenSense monitors, suggesting they are located significantly farther away.   
+
+Among the PM10 monitors, 4001 and 3015 appear to be among the closest to PollenSense sites, with distances consistently below 50,000 meters (50 km). This will be further analyzed to confirm the closest PM10 and pollen monitors.  
+
+
+### Step 11:
+
+Using the distance matrix, each PollenSense monitor was assigned its nearest PM10 monitor based on the smallest distance value. This assignment was accomplished by selecting the PM10 monitor with the minimum distance for each PollenSense monitor. The results are this calculation are shown in **Table 2.**  
+
+
+
+```{r Question11}
+
+### 11) For each PollenSense monitor, determine the closest PM10 monitor. Print the resulting list of matching sites.
+
+#find closest PM10 Monitor for each pollen Monitor
+closest_pm10_df <- as.data.frame(apply(distance_df, 2, function(col) {
+  pm10_id <- rownames(distance_df)[which.min(col)]  # Get PM10 ID with min distance
+  return(pm10_id)
+})) %>%
+  tibble::rownames_to_column(var = "PollenSense_Monitor") %>%  #row names to column
+  rename(PM10_Monitor = 2)  #rename 2nd column 
+
+print(closest_pm10_df)
+
+#display in a nice looking table
+kable(closest_pm10_df, caption = "Table 2. Closest PM10 Monitor for Each Pollen Monitor",
+      col.names = c("Pollen Monitor", "Closest PM10 Monitor"),
+      align = "c",
+      row.names = FALSE)
+
+
+```
+
+
+**Table 2**, shows that the 4001 PM10 monitor was the closest to three out of the four PollenSense monitors, while monitor 3006 was the closest to the remaining pollen monitor. The fact that a single PM10 monitor serves as the closest site for multiple pollen monitors could suggest a potential spatial limitation in PM10 coverage, which may influence subsequent correlation analyses between PM10 and pollen concentrations.  
+
+
+### Step 12: 
+
+To examine potential relationships between pollen and PM10 levels, the datasets were merged using the previously assigned closest PM10 monitor for each PollenSense site. The join operation was performed using left_join(), ensuring that each pollen monitor retained its respective daily median pollen concentration, while also acquiring the daily arithmetic mean PM10 concentration from its closest PM10 monitor.  
+
+To ensure a successful join, column names were standardized across datasets, and date formats were converted to Date objects for compatibility. After merging, the structure of the final dataset was checked to confirm that each pollen observation now included a corresponding PM10 value. The resulting dataset was used to create scatterplots and regression analyses in subsequent steps.  
+
+
+```{r Question12}
+
+
+### 12) Join PollenSense median pollen concentration to PM10 arithmetic mean concentration
+
+#rename arithmetic_mean and site_number for clarity before joining
+#add date as an actual date (as.date) and rename it 
+pm10_sf_AM <- pm10_sf %>%
+  rename(DailyMeanPM10 = arithmetic_mean, PM10_Monitor = site_number, Date = date_local) %>%
+  mutate(Date = as.Date(Date)) 
+
+
+
+#rename Pollen Monitor ID for consistency
+pollen_daily_median2 <- pollen_daily_median %>%
+  rename(PollenSense_Monitor = `Monitor ID`) %>%
+   select(Species, PollenSense_Monitor, Date, DailyMedian)  # Keep necessary columns
+  
+
+#left_join the datasets 
+#combine pollen and PM10 datasets based on closest monitors
+
+pollen_pm10_join <- closest_pm10_df %>%
+  left_join(pollen_daily_median2, by = "PollenSense_Monitor") %>%  # Join Pollen Data
+  left_join(pm10_sf_AM, by = c("PM10_Monitor", "Date"))  # Join PM10 Data using arithmetic mean
+
+
+# Check the structure to confirm successful merge
+#str(pollen_pm10_join)
+
+#Display the first few rows to confirm the data looks correct
+#head(pollen_pm10_join)
+
+
+
+```
+
+
+
+
+### Step 13:
+
+In order to visualize potential associations between pollen and PM10 levels, facet-wrapped scatterplots were generated, with each panel representing a different pollen species. The x-axis represents daily mean PM10 concentration (log-transformed), while the y-axis represents daily median pollen concentration.  
+
+A linear trend line (geom_smooth(method = "lm")) was added to each species panel to highlight potential relationships between pollen and PM10 levels.The results are shown in **Figure 6**.   
+
+
+```{r Question13, fig.width=14, fig.height=10, warning=FALSE}
+
+### 13)	Create a multipanel plot using facet_wrap() with a panel for each species, and within each panel use geom_point() to display a scatter plot of daily median pollen concentration (y-axis) vs. daily PM10 concentration (x-axis).  Include a linear trend line using geom_smooth(method=”lm”).
+
+#############ggplot of concentrations
+#scatter plots of daily median pollen vs daily PM10
+ggplot(pollen_pm10_join, aes(x = DailyMeanPM10, y = DailyMedian)) +
+  geom_point(alpha = 0.6, color = "blue") +  # Scatter points
+  geom_smooth(method = "lm", se = TRUE, color = "red") +  #linear trendline
+  scale_x_log10() +  # Log scale for PM10
+  facet_wrap(~ Species, scales = "free_y") +  #allow free y-axis scaling per species
+  labs(
+    title = "Fig. 6 Daily Median Pollen Concentration vs. PM10 Concentration",
+    x = "Daily PM10 Concentration (micrograms per cubic meter, log10)",
+    y = "Daily Median Pollen Concentration"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+    strip.text = element_text(size = 11, face = "bold"),  # Facet labels
+    axis.text.x = element_text(size = 10, angle = 45, hjust = 1),  # Rotate x-axis
+    axis.text.y = element_text(size = 10)  # Adjust y-axis text size
+  )
+
+
+
+```
+
+
+**Figure 6** includes scatterplots of the relationship between daily median pollen concentration and daily PM10 concentration across different pollen species. Each panel corresponds to a unique pollen species, with the x-axis representing daily PM10 concentration (on a log10 scale) and the y-axis representing daily median pollen concentration. The blue points denote individual daily observations, while the red trendline represents the fitted linear regression model.  
+
+Overall, the scatterplots may suggest little to no strong relationship between PM10 concentration and pollen concentration for most species. The data points are generally dispersed without clear trends, and in many cases, they remain clustered near the lower end of the PM10 concentration scale, particularly in species such as Olea, Pinus, Plantago, and Rumex. The fitted trendlines are relatively flat, which could indicate weak or no correlation between PM10 levels and pollen concentration.  
+
+Some species, including Platanus, Rumex, and Olea, show very little variation in pollen concentration, with values near zero throughout the range of PM10 concentrations. This suggests that these species were either not prevalent in the dataset or had minimal measurable pollen concentrations during the study period.  
+
+
+
+### Step 14:	
+
+In order to formally test the association between PM10 and pollen concentrations, a linear regression model was fit for each pollen species. The outcome variable was daily median pollen concentration, while the primary predictor was daily mean PM10 concentration. The models also controlled for month and PollenSense monitor ID, treating both as categorical variables. The goal of this regression is to assess how PM10 concentration is associated with pollen concentration while controlling for the effects of time and location. The results are displayed in **Table 3**.   
+
+
+```{r Question14}
+
+### 14)	For each species, use lm() to estimate the association between daily median pollen concentration vs. daily PM10 concentration, controlling for categorical month and categorical PollenSense Monitor ID.  Display the main effect results in a table, including point-estimates, confidence intervals, and p-values.  The group_modify() function may be helpful.
+
+
+#convert categorical variables to factors before regression
+pollen_pm10_join <- pollen_pm10_join %>%
+  mutate(
+    Month = factor(month(Date, label = TRUE)),  # Convert month to categorical
+    PollenSense_Monitor = factor(PollenSense_Monitor)  # Ensure Pollen ID is categorical
+  )
+
+#regression per species
+#PM10 is the predictor, pollen is the outcome
+#month and pollenmonitor are controlled for as well
+#using group_modify function
+results <- pollen_pm10_join %>%
+  group_by(Species) %>%
+  group_modify(~ {
+    model <- lm(DailyMedian ~ DailyMeanPM10 + Month + PollenSense_Monitor, data = .x)
+    tidy(model, conf.int = TRUE)  # Extract results
+  }) %>%
+  ungroup()
+
+#we only need main effect of PM10 only
+main_effects <- results %>%
+  filter(term == "DailyMeanPM10") %>%  #Keep only PM10 effect
+  select(Species, estimate, conf.low, conf.high, p.value) %>%
+  rename(
+    Estimate = estimate,
+    `95% CI Lower` = conf.low,
+    `95% CI Upper` = conf.high,
+    `P-Value` = p.value
+  )
+
+#make a nice looking table with kable()
+kable(main_effects, digits = 4, caption = "Table 3. Regression Results: PM10 and Pollen")
+
+
+```
+
+
+## Results 
+
+### Step 15
+
+#### Regression Analysis 
+
+The regression analyses displayed in **Table 3** examined the association between daily median pollen concentration and PM10 levels while adjusting for month and PollenSense monitor location. The estimates represent the expected change in daily median pollen concentration (grains per cubic meter) associated with a one-unit increase in mean PM10 concentration (measured in micrograms per cubic meter), holding month and monitor location constant.  
+
+Several pollen species showed a statistically significant positive association with PM10 levels. Poaceae had the largest effect estimate (0.798, 95% CI: 0.427 to 1.168, p < 0.001), suggesting that for each additional mean unit increase in PM10 concentration, the daily median pollen concentration of Poaceae increased by approximately 0.80 pollen grains per cubic meter.    
+
+Similarly, Cupressaceae (0.647, 95% CI: 0.232 to 1.062, p = 0.0023) and Populus (0.3399, 95% CI: 0.1044 to 0.5754, p = 0.0047) exhibited significant positive associations, with each additional mean unit increase in PM10 concentration, there is a resulting in an increase of 0.6 and 0.4 pollen grains per cubic meter, respectively.  
+
+Total pollen concentration) showed the strongest effect (4.4665, 95% CI: 1.3077 to 7.6233, p = 0.0056), indicating that increasing PM10 levels are strongly associated with total pollen concentration, likely reflecting an overall environmental relationship rather than a species-specific effect. For each additional mean increase in PM10 concentration (in micrograms per cubic meter), there was a 4.4 increase in median pollen grains per cubic meter.  
+
+Other species, including Quercus (0.3999, 95% CI: 0.1340 to 0.6658, p = 0.0032) and Morus (0.2284, 95% CI: 0.0373 to 0.4195, p = 0.0192), also demonstrated a statistically significant positive relationship with PM10. With each PM10 unit increase, there was a 0.3, 0.6, and 0.4 increase in median Quercus and Morus pollen grains per cubic meter, respectively. These results suggest that pollen concentrations from these species tend to increase as PM10 levels rise, potentially due to similar atmospheric conditions influencing both particulate matter and pollen dispersal.  
+
+However, several species exhibited negligible or non-significant associations with PM10 levels. Species such as Acer (0.1164, 95% CI: -0.0456 to 0.2784, p = 0.1590), Alnus (0.0239, 95% CI: -0.2542 to 0.3019, p = 0.8663), and Fraxinus (0.1021, 95% CI: -0.0604 to 0.2645, p = 0.2179) had confidence intervals that included zero, indicating a lack of strong evidence for an association. Additionally, some species, including Ambrosia, Olea, Pinus, Platanus, and Rumex, had estimates of exactly zero, possibly due to lack of variation or data constraints in the model.  
+
+A few species exhibited small but positive associations, but their p-values were not below the conventional 0.05 significance threshold, meaning that there is insufficient evidence to confirm a consistent effect. These included Carya (0.0576, 95% CI: -0.0209 to 0.1361, p = 0.1505), Chenopodium/Amaranthus (0.0619, 95% CI: -0.0319 to 0.1557, p = 0.1956), and Salix (0.1979, 95% CI: -0.0267 to 0.4225, p = 0.0841). Although the estimates suggest a potential increase in pollen levels with higher PM10 concentrations, the uncertainty in the confidence intervals prevents strong conclusions.  
+
+Notably, Artemisia exhibited a negative but non-significant association (-0.0568, 95% CI: -0.1404 to 0.0268, p = 0.1829), meaning that pollen concentration for this species may decrease slightly with increasing PM10 levels, though this effect is not statistically significant.  
+
+Overall the results of this analysis indicate that certain pollen species, particularly Poaceae, Cupressaceae, and Populus, are positively associated with PM10 concentrations, suggesting that changes in particulate matter levels may influence pollen levels in the atmosphere. However, many species did not exhibit strong associations, indicating that the relationship between PM10 and pollen concentration may be species-dependent and influenced by additional environmental or seasonal factors.  
+
+#### Spatial Distribution of Pollen and PM10 Monitors
+
+**Figure 5** presents a spatial map of PollenSense and PM10 monitor locations in Utah. PollenSense monitors (yellow) are relatively concentrated in the region south of Salt Lake City, while PM10 monitors (red) are more dispersed across the state. Some PM10 monitors are located close to PollenSense monitors, whereas others are significantly farther away. This spatial arrangement suggests that PM10 exposure levels might not be uniform across all pollen monitoring locations, highlighting the importance of selecting the nearest PM10 monitor for each PollenSense site. The closest PM10 monitor for each PollenSense site was identified in **Table 2**. The variation in distance indicates that the proximity of PM10 data to pollen monitoring sites differs considerably, which could introduce variability in the relationship between PM10 levels and pollen concentration.  
+
+
+#### Seasonal Trends in Pollen Concentration
+
+Pollen concentration exhibited strong seasonal variation, as seen in **Figure 4**, which displays a time series of median daily pollen concentrations for each species at each monitor. Several pollen species showed distinct seasonal peaks, with higher concentrations observed in spring and early summer, followed by a decline in late summer and fall. The trends were not uniform across species, with some species exhibiting extended periods of pollen release, while others had short, intense bursts of activity.    
+
+The boxplots in **Figure 3** further illustrate the distribution of pollen concentration by month and monitor, showing that different species had variable seasonal patterns. Species such as Poaceae  and Cupressaceae  had consistently higher pollen levels, while species like Olea and Rumex exhibited lower pollen concentrations year-round.  
+
+
+
+#### Relationship Between PM10 and Pollen Concentration
+
+To examine the relationship between airborne particulate matter (PM10) and pollen concentration, Figure 6 presents scatterplots of daily median pollen concentration vs. daily PM10 concentration for each species. A linear regression line (red) was fitted to each plot to assess overall trends.  
+
+Visually, the plots reveal that many species exhibit no clear association between PM10 levels and pollen concentration, as indicated by near-horizontal trend lines. However, certain species, such as Poaceae, Morus, and Cupressaceae, show a slight upward trend, suggesting a potential positive association between PM10 and pollen concentration. In contrast, some species, such as Platanus and Rumex, had little to no variation in pollen concentration relative to PM10 levels.  
+
+Overall, these results suggest that PM10 levels could influence pollen concentrations for specific species, possibly due to interactions between airborne particles and pollen dispersal mechanisms. However, further investigation is needed to determine whether these associations are causal or reflect broader environmental factors affecting both pollen and PM10 levels.  
+
+
+
+## Discussion
+
+This study examined the relationship between daily median pollen concentrations and PM10 levels while controlling for seasonal variation and monitoring location. The results indicate that several pollen species, including Poaceae, Cupressaceae, and Populus, exhibit significant positive associations with PM10 concentrations, suggesting that increases in PM10 levels correspond with increases in ambient pollen concentrations. Conversely, many other species showed weak or non-significant associations, highlighting the species-dependent nature of this relationship. These findings contribute to a growing body of research on environmental exposures and air quality, with potential implications for public health and climate change adaptation strategies (Anderegg et al., 2021; HHS, 2024).   
+
+The observed associations between PM10 and pollen align with previous studies suggesting that particulate matter and allergenic pollen share common atmospheric transport mechanisms (Choi et al., 2021). Particulate matter can act as carriers for pollen grains, facilitating their dispersion over greater distances. The significant association between total pollen concentration and PM10 found in this analysis further supports the hypothesis that broader environmental conditions influence both pollen and particulate matter levels.  
+
+However, not all pollen species exhibited a clear relationship with PM10 concentrations. Some species, such as Acer, Alnus, and Fraxinus, showed weak or non-significant associations, suggesting that factors beyond PM10 concentrations, such as local meteorology, vegetation distribution, and pollen release timing, may play a dominant role in their atmospheric presence. The absence of an effect for certain species, such as Olea, Pinus, and Platanus, which had coefficient estimates of exactly zero, may be due to data constraints, measurement limitations, or low pollen counts in the monitored locations.  
+
+Some limitations of this study include the fact that this analysis was restricted to a region of Utah with four pollen monitoring sites, which limits the sampling size and the generalizability of the findings to larger geographic regions.
+Additionally, while PM10 and pollen concentrations were analyzed at the daily level, short-term fluctuations in meteorological conditions (e.g., wind speed, humidity, rainfall) could influence the data and was not accounted for in the analysis. Future research should incorporate meteorological covariates from nearby weather monitors in the region to further examine the relationship between pollen and particulate matter.  
+
+Overall, this study provides evidence that PM10 concentrations are positively associated with certain pollen species, reinforcing concerns about the potential combined impact of air pollution and airborne allergens on respiratory health. These findings may have implications for allergy forecasting, public health interventions, climate and health prediciton models, and climate adaptation policies aimed at reducing the burden of pollen-related allergic diseases in an era of increasing air pollution.  
+
+
+
+
+
+## References 
+
+Anderegg, W. R. L., Abatzoglou, J. T., Anderegg, L. D. L., Bielory, L., Kinney, P. L., & Ziska, L. (2021). Anthropogenic climate change is worsening North American pollen seasons. Proceedings of the National Academy of Sciences of the United States of America, 118(7), e2013284118. https://doi.org/10.1073/pnas.2013284118  
+
+Choi, Y.-J., Lee, K. S., Lee, Y.-S., Kim, K. R., & Oh, J.-W. (2022). Analysis of the Association Among Air Pollutants, Allergenic Pollen, and Respiratory Virus Infection of Children in Guri, Korea During Recent 5 Years. Allergy, Asthma & Immunology Research, 14(3), 289–299. https://doi.org/10.4168/aair.2022.14.3.289  
+
+Choi, Y.-J., Lee, K. S., & Oh, J.-W. (2021). The Impact of Climate Change on Pollen Season and Allergic Sensitization to Pollens. Immunology and Allergy Clinics of North America, 41(1), 97–109. https://doi.org/10.1016/j.iac.2020.09.004  
+
+Department of Health and Human Services [HHS], A. S. for. (2023, March 3). Pollen: Spring Pollen Season is Getting Longer & More Intense.
+https://www.hhs.gov/climate-change-health-equity-environmental-justice/climate-change-health-equity/climate-health-outlook/pollen/index.html  
+
+
+
+
